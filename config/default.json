@@ -1,7 +1,7 @@
 {
-  "project_name": "",
-  "capture_max_files": 1500,
-  "include_patterns": ["**/*.py", "**/*.md", "pyproject.toml"],
+  "project_name": "infinitecontex",
+  "capture_max_files": 600,
+  "include_patterns": ["**/*.py", "**/*.md", "pyproject.toml", "README.md"],
   "exclude_patterns": [
     ".git/**",
     ".venv/**",
