@@ -44,23 +44,37 @@ def compile_packet(snapshot: Snapshot, budget: int) -> ContextPacket:
         f"Top dirs: {', '.join(snapshot.structural.repo_tree_top[:10])}"
     )
 
+    structural_lines = [
+        "Key files:",
+        *[f"- {p}" for p in _truncate_lines(snapshot.structural.key_files, 20)],
+        "Config files:",
+        *[f"- {p}" for p in _truncate_lines(snapshot.structural.config_files, 20)],
+        "Env files:",
+        *[f"- {p}" for p in _truncate_lines(snapshot.structural.env_files, 10)],
+        "Entry points:",
+        *[f"- {p}" for p in _truncate_lines(snapshot.structural.entry_points, 10)],
+        "Modules:",
+    ]
+    for m_group, m_list in list(snapshot.structural.modules.items())[:10]:
+        structural_lines.append(f"- {m_group} (contains {len(m_list)} source files)")
+
+    behavioral_lines = [
+        "Test surfaces:",
+        *[f"- {p}" for p in _truncate_lines(snapshot.behavioral.test_surfaces, 20)],
+        "Routes/commands:",
+        *[f"- {p}" for p in _truncate_lines(snapshot.behavioral.routes_or_commands, 20)],
+        "Scripts:",
+    ]
+    for s_name, s_cmd in list(snapshot.behavioral.scripts.items())[:10]:
+        behavioral_lines.append(f"- {s_name}: {s_cmd}")
+
+    behavioral_lines.append("Call hints:")
+    for ch_func, ch_calls in list(snapshot.behavioral.call_hints.items())[:20]:
+        behavioral_lines.append(f"- {ch_func}: {', '.join(ch_calls[:5])}")
+
     subsystem_packets = {
-        "structure": "\n".join(
-            [
-                "Key files:",
-                *[f"- {p}" for p in _truncate_lines(snapshot.structural.key_files, 20)],
-                "Entry points:",
-                *[f"- {p}" for p in _truncate_lines(snapshot.structural.entry_points, 10)],
-            ]
-        ),
-        "behavior": "\n".join(
-            [
-                "Test surfaces:",
-                *[f"- {p}" for p in _truncate_lines(snapshot.behavioral.test_surfaces, 20)],
-                "Routes/commands:",
-                *[f"- {p}" for p in _truncate_lines(snapshot.behavioral.routes_or_commands, 20)],
-            ]
-        ),
+        "structure": "\n".join(structural_lines),
+        "behavior": "\n".join(behavioral_lines),
     }
 
     working_set_packet = "\n".join(

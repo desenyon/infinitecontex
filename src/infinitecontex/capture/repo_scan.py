@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import fnmatch
 import hashlib
+import os
 from pathlib import Path
 from typing import Iterable
 
@@ -40,15 +41,25 @@ def _iter_files(
 ) -> Iterable[Path]:
     include = include_patterns or ["**/*", "*"]
     exclude = exclude_patterns or [".git/**", ".infctx/**", ".venv/**", "__pycache__/**", "**/*.pyc"]
-    for path in root.rglob("*"):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(root).as_posix()
-        if _matches_pattern(rel, exclude):
-            continue
-        if not _matches_pattern(rel, include):
-            continue
-        yield path
+    
+    for dirpath, dirnames, filenames in os.walk(root):
+        rel_dir = Path(dirpath).relative_to(root).as_posix()
+        current_dir = "" if rel_dir == "." else f"{rel_dir}/"
+        
+        pruned_dirs = []
+        for d in dirnames:
+            rel_d = f"{current_dir}{d}"
+            if not _matches_pattern(rel_d, exclude):
+                pruned_dirs.append(d)
+        dirnames[:] = pruned_dirs
+
+        for f in filenames:
+            rel = f"{current_dir}{f}"
+            if _matches_pattern(rel, exclude):
+                continue
+            if not _matches_pattern(rel, include):
+                continue
+            yield Path(dirpath) / f
 
 
 def _fingerprint(path: Path, root: Path) -> FileFingerprint:

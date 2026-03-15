@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from infinitecontex.graph.store import ContextGraphStore
 from infinitecontex.storage.layout import initialize_layout
 
 
-def test_graph_roundtrip(tmp_repo) -> None:
+def test_graph_roundtrip(tmp_repo: Path) -> None:
     layout = initialize_layout(tmp_repo)
     graph = ContextGraphStore(layout.graph / "context_graph.json")
     graph.add_file_nodes(["app.py"])

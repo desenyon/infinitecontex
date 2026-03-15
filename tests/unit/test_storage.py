@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from infinitecontex.storage.db import Database
 from infinitecontex.storage.layout import initialize_layout
 
 
-def test_initialize_layout_creates_manifest(tmp_repo) -> None:
+def test_initialize_layout_creates_manifest(tmp_repo: Path) -> None:
     layout = initialize_layout(tmp_repo)
     assert (layout.metadata / "manifest.json").exists()
 
 
-def test_db_migration_creates_tables(tmp_repo) -> None:
+def test_db_migration_creates_tables(tmp_repo: Path) -> None:
     layout = initialize_layout(tmp_repo)
     db = Database(layout.metadata / "state.db")
     db.migrate()
