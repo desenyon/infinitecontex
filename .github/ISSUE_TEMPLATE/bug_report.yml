@@ -7,13 +7,14 @@ body:
     id: summary
     attributes:
       label: Summary
-      description: What happened?
+      description: What failed, and why does it matter?
     validations:
       required: true
   - type: textarea
     id: repro
     attributes:
       label: Steps to Reproduce
+      description: Include exact commands, repo state, and whether watch mode was active.
     validations:
       required: true
   - type: textarea
@@ -22,3 +23,8 @@ body:
       label: Expected Behavior
     validations:
       required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, Python version, uv version, and CI or local context.
