@@ -1,0 +1,67 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "infinitecontex"
+version = "0.1.0"
+description = "Infinite Context: local-first project memory engine for AI coding workflows"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "Infinite Context Contributors" }]
+keywords = ["ai", "developer-tools", "context", "cli", "memory"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Software Development :: Libraries",
+  "Topic :: Utilities",
+]
+dependencies = [
+  "typer>=0.16.0",
+  "pydantic>=2.11.0",
+  "pydantic-settings>=2.8.0",
+  "networkx>=3.4.2",
+  "orjson>=3.10.0",
+  "rich>=13.9.0",
+  "watchfiles>=1.0.4",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.3.4",
+  "pytest-cov>=6.0.0",
+  "ruff>=0.11.0",
+  "mypy>=1.15.0",
+  "types-networkx>=3.4.2.20250211",
+  "build>=1.2.2.post1",
+]
+
+[project.scripts]
+infctx = "infinitecontex.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/infinitecontex"]
+
+[tool.pytest.ini_options]
+addopts = "-q --cov=src/infinitecontex --cov-report=term-missing"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+include = ["src/**/*.py", "tests/**/*.py", "scripts/**/*.py", "benchmarks/**/*.py"]
+extend-exclude = [".github/skills"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+mypy_path = "src"
+packages = ["infinitecontex"]
