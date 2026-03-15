@@ -4,7 +4,6 @@ Infinite Context is a local-first project memory engine for AI-assisted software
 
 The problem it solves: AI coding sessions are stateless by default. Every new conversation starts from zero. Chat history is noisy and expensive to re-feed. Context files like CLAUDE.md degrade into markdown graveyards. Infinite Context replaces all of that with a single, always-current source of truth that is generated from your actual repository state rather than manually maintained.
 
-
 ## How It Works
 
 Running `infctx snapshot` scans the repository, compresses the structural and behavioral signal, and writes a canonical handoff file to `.infctx/project/inside.infinite_context.md`. The same data is available as `.infctx/project/inside.infinite_context.json` for programmatic consumption.
@@ -19,25 +18,14 @@ Any coding agent (GitHub Copilot, Claude Code, Cursor, generic LLM) can open tha
 
 The handoff file is regenerated on every snapshot and can be kept live with `infctx watch`.
 
-
 ## Installation
 
-### From PyPI (once published)
+### From PyPI (pls use uv)
 
 ```bash
 pip install infinitecontex
 # or with uv
 uv add infinitecontex
-```
-
-### From source (recommended for development)
-
-Requires Python 3.12 or later and [uv](https://docs.astral.sh/uv/).
-
-```bash
-git clone https://github.com/desenyon/infinitecontex
-cd infinitecontex
-uv sync --extra dev
 ```
 
 Verify the install:
@@ -46,16 +34,6 @@ Verify the install:
 uv run infctx --version
 uv run infctx --help
 ```
-
-### Without uv
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev]'
-infctx --version
-```
-
 
 ## Setup
 
@@ -85,7 +63,6 @@ Verify everything is healthy:
 uv run infctx doctor
 ```
 
-
 ## Quick Start Workflow
 
 ```bash
@@ -106,7 +83,6 @@ uv run infctx prompt --mode generic-agent-restore --token-budget 1200
 uv run infctx restore
 uv run infctx status --json
 ```
-
 
 ## Command Reference
 
@@ -397,7 +373,6 @@ uv run infctx config --json
 uv run infctx config --set-file config/default.json
 ```
 
-
 ## Configuration Reference
 
 The active configuration is built by merging four sources in priority order:
@@ -409,19 +384,19 @@ The active configuration is built by merging four sources in priority order:
 
 Key settings:
 
-| Setting | Type | Default | Description |
-|---|---|---|---|
-| `project_name` | string | directory name | Human-readable project name included in handoff files |
-| `capture_max_files` | int | 1500 | Maximum number of files to include in a snapshot |
-| `include_patterns` | list | `["**"]` | Glob patterns for files to include |
-| `exclude_patterns` | list | see below | Glob patterns for files to exclude |
-| `policies.token.default_budget` | int | 1200 | Default token budget for `prompt` |
-| `policies.token.min_budget` | int | 300 | Minimum token budget enforced |
-| `policies.token.max_budget` | int | 16000 | Maximum token budget enforced |
-| `policies.summarization.max_key_files` | int | 30 | Max key files to surface in prompts |
-| `policies.summarization.max_active_files` | int | 25 | Max active files to surface in prompts |
-| `policies.privacy.persist_shell_history` | bool | false | Whether to store shell history in the state db |
-| `policies.privacy.redact_patterns` | list | API key patterns | Regex patterns for secrets to redact from captured content |
+| Setting                                     | Type   | Default          | Description                                                |
+| ------------------------------------------- | ------ | ---------------- | ---------------------------------------------------------- |
+| `project_name`                            | string | directory name   | Human-readable project name included in handoff files      |
+| `capture_max_files`                       | int    | 1500             | Maximum number of files to include in a snapshot           |
+| `include_patterns`                        | list   | `["**"]`       | Glob patterns for files to include                         |
+| `exclude_patterns`                        | list   | see below        | Glob patterns for files to exclude                         |
+| `policies.token.default_budget`           | int    | 1200             | Default token budget for `prompt`                        |
+| `policies.token.min_budget`               | int    | 300              | Minimum token budget enforced                              |
+| `policies.token.max_budget`               | int    | 16000            | Maximum token budget enforced                              |
+| `policies.summarization.max_key_files`    | int    | 30               | Max key files to surface in prompts                        |
+| `policies.summarization.max_active_files` | int    | 25               | Max active files to surface in prompts                     |
+| `policies.privacy.persist_shell_history`  | bool   | false            | Whether to store shell history in the state db             |
+| `policies.privacy.redact_patterns`        | list   | API key patterns | Regex patterns for secrets to redact from captured content |
 
 ### Recommended config for a Python project
 
@@ -453,7 +428,6 @@ uv run infctx config --set-file myconfig.json
 
 The `config/default.json` in this repository contains a working preset for Python projects.
 
-
 ## The Handoff Files
 
 Every snapshot regenerates two canonical files:
@@ -479,7 +453,6 @@ uv run infctx prompt --mode claude-code-restore --token-budget 4000
 ```
 
 Pipe the output directly into a new session, or save it to a file for reuse.
-
 
 ## Development Setup
 
@@ -515,62 +488,6 @@ uv run pytest tests/unit/test_summarizer.py -v
 The test suite covers the summarizer, config loading, repo scanning, export/import, restore engine, doctor checks, snapshot pipeline, and CLI version flag. Integration tests run a full snapshot cycle in a temporary directory.
 
 
-## Publishing to PyPI
-
-The repository includes a `publish.yml` GitHub Actions workflow that publishes to PyPI using [uv publish](https://docs.astral.sh/uv/guides/publish/). It uses OIDC trusted publishing, which means no API token needs to be stored in GitHub secrets.
-
-### One-time setup
-
-1. Create a PyPI account and a new project named `infinitecontex` at https://pypi.org.
-
-2. In the PyPI project settings, go to "Publishing" and add a trusted publisher:
-   - Publisher: GitHub Actions
-   - Repository owner: `desenyon`
-   - Repository name: `infinitecontex`
-   - Workflow name: `publish.yml`
-   - Environment name: `pypi`
-
-3. In the GitHub repository settings, go to Environments and create an environment named `pypi`. Optionally add a required reviewer to gate production deploys.
-
-### Triggering a release
-
-Bump the version in two places:
-
-```bash
-# src/infinitecontex/version.py
-__version__ = "0.2.0"
-
-# pyproject.toml
-version = "0.2.0"
-```
-
-Commit, tag, and push:
-
-```bash
-git add src/infinitecontex/version.py pyproject.toml
-git commit -m "release: bump to 0.2.0"
-git tag v0.2.0
-git push origin main --tags
-```
-
-Then create a GitHub release from the tag. Publishing to PyPI triggers automatically when the release is marked as published.
-
-You can also trigger a manual publish from the Actions tab using the `workflow_dispatch` event on the Publish workflow.
-
-### Installing a published release
-
-```bash
-# With uv
-uv add infinitecontex
-
-# With pip
-pip install infinitecontex
-
-# With uvx for one-off use without installing
-uvx infinitecontex --help
-```
-
-
 ## Storage Layout
 
 All state is stored under `.infctx/` in the project root:
@@ -589,39 +506,35 @@ All state is stored under `.infctx/` in the project root:
 
 The SQLite database contains tables for snapshots, file metadata, decision log, pin registry, event log, and retrieval index. See `docs/storage-format.md` and `docs/data-model-reference.md` for the full schema.
 
-
 ## Documentation
 
 The `docs/` directory contains detailed reference material:
 
-| Document | Contents |
-|---|---|
-| `architecture.md` | Component diagram and design decisions |
-| `cli-behavior-contract.md` | Stability guarantees for CLI flags and output |
-| `cli-reference.md` | Full CLI reference with all flags |
-| `coding-standards.md` | Style guide and conventions for contributors |
-| `config-reference.md` | Complete configuration schema with all defaults |
-| `data-model-reference.md` | Database schema and entity relationships |
-| `deployment-release.md` | Release checklist and uv-based publish workflow |
-| `mental-model.md` | How to think about context compilation |
-| `observability-diagnostics.md` | Event log structure and doctor check details |
-| `restore-pipeline.md` | How restore divergence detection works |
-| `security-privacy.md` | Local-first trust model, redaction behavior |
-| `storage-format.md` | File layout and SQLite schema |
-| `testing-strategy.md` | Test organization and coverage goals |
-| `token-optimization.md` | How token budgets affect output |
-| `troubleshooting.md` | Common issues and fixes |
-
+| Document                         | Contents                                        |
+| -------------------------------- | ----------------------------------------------- |
+| `architecture.md`              | Component diagram and design decisions          |
+| `cli-behavior-contract.md`     | Stability guarantees for CLI flags and output   |
+| `cli-reference.md`             | Full CLI reference with all flags               |
+| `coding-standards.md`          | Style guide and conventions for contributors    |
+| `config-reference.md`          | Complete configuration schema with all defaults |
+| `data-model-reference.md`      | Database schema and entity relationships        |
+| `deployment-release.md`        | Release checklist and uv-based publish workflow |
+| `mental-model.md`              | How to think about context compilation          |
+| `observability-diagnostics.md` | Event log structure and doctor check details    |
+| `restore-pipeline.md`          | How restore divergence detection works          |
+| `security-privacy.md`          | Local-first trust model, redaction behavior     |
+| `storage-format.md`            | File layout and SQLite schema                   |
+| `testing-strategy.md`          | Test organization and coverage goals            |
+| `token-optimization.md`        | How token budgets affect output                 |
+| `troubleshooting.md`           | Common issues and fixes                         |
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the development workflow, commit conventions, and how to run the test suite. All contributions require passing ruff, mypy, and pytest before review.
 
-
 ## Security
 
 Sensitive values matching the configured `redact_patterns` are stripped from captured content before being written to the database. No data is sent to any external service. See [SECURITY.md](SECURITY.md) for the full trust model and how to report vulnerabilities.
-
 
 ## License
 
