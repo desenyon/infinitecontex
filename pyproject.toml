@@ -18,6 +18,7 @@ classifiers = [
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
   "Topic :: Software Development :: Libraries",
   "Topic :: Utilities",
 ]
@@ -35,6 +36,7 @@ dependencies = [
 Homepage = "https://github.com/desenyon/infinitecontex"
 Repository = "https://github.com/desenyon/infinitecontex"
 Issues = "https://github.com/desenyon/infinitecontex/issues"
+Changelog = "https://github.com/desenyon/infinitecontex/releases"
 
 [project.optional-dependencies]
 dev = [
