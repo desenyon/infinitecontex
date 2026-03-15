@@ -1,0 +1,46 @@
+{
+  "project_name": "",
+  "capture_max_files": 1500,
+  "include_patterns": ["**/*.py", "**/*.md", "pyproject.toml"],
+  "exclude_patterns": [
+    ".git/**",
+    ".venv/**",
+    "node_modules/**",
+    ".infctx/**",
+    ".pytest_cache/**",
+    ".mypy_cache/**",
+    ".ruff_cache/**",
+    "**/*.pyc",
+    "build/**",
+    "dist/**",
+    ".github/skills/**"
+  ],
+  "modes": [
+    "copilot-restore",
+    "claude-code-restore",
+    "generic-agent-restore",
+    "human-handoff"
+  ],
+  "policies": {
+    "token": {
+      "default_budget": 1200,
+      "min_budget": 300,
+      "max_budget": 16000
+    },
+    "summarization": {
+      "file_snippet_max_lines": 40,
+      "max_recent_diffs": 20,
+      "max_key_files": 30,
+      "max_active_files": 25
+    },
+    "privacy": {
+      "persist_shell_history": false,
+      "persist_chat_ingest": false,
+      "redact_patterns": [
+        "(?i)api[_-]?key\\s*[:=]\\s*\\S+",
+        "(?i)token\\s*[:=]\\s*\\S+",
+        "(?i)password\\s*[:=]\\s*\\S+"
+      ]
+    }
+  }
+}
