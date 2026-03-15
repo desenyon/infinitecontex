@@ -4,10 +4,10 @@ build-backend = "hatchling.build"
 
 [project]
 name = "infinitecontex"
-version = "0.1.2"
+version = "0.1.3"
 description = "Infinite Context: local-first project memory engine for AI coding workflows"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Infinite Context Contributors" }]
 keywords = ["ai", "developer-tools", "context", "cli", "memory"]
@@ -17,6 +17,7 @@ classifiers = [
   "Intended Audience :: Developers",
   "License :: OSI Approved :: MIT License",
   "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
   "Topic :: Software Development :: Libraries",
@@ -60,7 +61,7 @@ testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 120
-target-version = "py312"
+target-version = "py311"
 include = ["src/**/*.py", "tests/**/*.py", "scripts/**/*.py", "benchmarks/**/*.py"]
 extend-exclude = [".github/skills"]
 
@@ -68,7 +69,7 @@ extend-exclude = [".github/skills"]
 select = ["E", "F", "I"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.11"
 strict = true
 mypy_path = "src"
 packages = ["infinitecontex"]

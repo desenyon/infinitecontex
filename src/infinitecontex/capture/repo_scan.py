@@ -41,11 +41,11 @@ def _iter_files(
 ) -> Iterable[Path]:
     include = include_patterns or ["**/*", "*"]
     exclude = exclude_patterns or [".git/**", ".infctx/**", ".venv/**", "__pycache__/**", "**/*.pyc"]
-    
+
     for dirpath, dirnames, filenames in os.walk(root):
         rel_dir = Path(dirpath).relative_to(root).as_posix()
         current_dir = "" if rel_dir == "." else f"{rel_dir}/"
-        
+
         pruned_dirs = []
         for d in dirnames:
             rel_d = f"{current_dir}{d}"
@@ -103,6 +103,32 @@ def scan_structural(
 
     key_files = [f for f in files if Path(f).name in KEY_FILE_NAMES][:40]
 
+    directory_summaries: dict[str, str] = {}
+    for d in sorted(set(Path(f).parent.as_posix() for f in files if f != ".")):
+        dpath = root / d
+        if not dpath.is_dir():
+            continue
+        summary = ""
+        init_file = dpath / "__init__.py"
+        readme_file = dpath / "README.md"
+        if readme_file.exists():
+            text = readme_file.read_text(encoding="utf-8", errors="ignore").strip()
+            lines = [line for line in text.splitlines() if line.strip() and not line.startswith("#")]
+            if lines:
+                summary = lines[0][:150] + ("..." if len(lines[0]) > 150 else "")
+        elif init_file.exists():
+            text = init_file.read_text(encoding="utf-8", errors="ignore")
+            try:
+                tree = ast.parse(text)
+                doc = ast.get_docstring(tree)
+                if doc:
+                    summary = doc.splitlines()[0][:150] + ("..." if len(doc.splitlines()[0]) > 150 else "")
+            except Exception:
+                pass
+
+        if summary:
+            directory_summaries[d] = summary
+
     structural = StructuralContext(
         repo_tree_top=sorted({part.split("/")[0] for part in files})[:100],
         key_files=key_files,
@@ -110,6 +136,7 @@ def scan_structural(
         entry_points=entry_points,
         config_files=config_files[:80],
         env_files=env_files[:20],
+        directory_summaries=directory_summaries,
     )
     return structural, fingerprints
 

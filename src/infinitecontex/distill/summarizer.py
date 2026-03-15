@@ -88,9 +88,7 @@ def compile_packet(snapshot: Snapshot, budget: int) -> ContextPacket:
         ]
     )
 
-    decisions_packet = "\n".join(
-        ["Decisions:", *[f"- {d}" for d in _truncate_lines(snapshot.intent.decisions, 20)]]
-    )
+    decisions_packet = "\n".join(["Decisions:", *[f"- {d}" for d in _truncate_lines(snapshot.intent.decisions, 20)]])
 
     restore_brief = "\n".join(
         [

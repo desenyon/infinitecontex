@@ -31,8 +31,7 @@ def validate_restore(snapshot: Snapshot, project_root: Path) -> RestoreReport:
             valid_items.append(rel)
 
     summary = (
-        f"stale={len(stale_items)} missing={len(missing_items)} "
-        f"changed={len(changed_items)} valid={len(valid_items)}"
+        f"stale={len(stale_items)} missing={len(missing_items)} changed={len(changed_items)} valid={len(valid_items)}"
     )
 
     return RestoreReport(

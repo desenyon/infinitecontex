@@ -16,12 +16,14 @@ def main() -> None:
     structural, fps = scan_structural(args.repo)
     elapsed = time.perf_counter() - start
 
-    print({
-        "repo": str(args.repo),
-        "elapsed_sec": round(elapsed, 4),
-        "files": len(fps),
-        "top_dirs": structural.repo_tree_top[:10],
-    })
+    print(
+        {
+            "repo": str(args.repo),
+            "elapsed_sec": round(elapsed, 4),
+            "files": len(fps),
+            "top_dirs": structural.repo_tree_top[:10],
+        }
+    )
 
 
 if __name__ == "__main__":

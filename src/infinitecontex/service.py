@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from uuid import uuid4
 
 import orjson
@@ -172,18 +172,25 @@ class InfiniteContextService:
 
     def ingest_chat(self, chat_path: Path) -> dict[str, object]:
         self._ensure_ready()
+        payload = ingest_chat_text(chat_path)
+
         cfg = load_app_config(self.project_root)
         patterns = cfg.policies.privacy.redact_patterns
-        payload = ingest_chat_text(chat_path)
-        payload = {
-            key: redact_text(value, patterns) if isinstance(value, str) else redact_list(value, patterns)
-            for key, value in payload.items()
-        }
-        dump_json(self.layout.working_set / "intent_state.json", payload)
         chat_body = chat_path.read_text(encoding="utf-8", errors="ignore")
         self.retrieval.index_document("chat", chat_path.name, redact_text(chat_body, patterns))
         EventLogger(self.layout.events / "events.jsonl").log("ingest_chat", {"file": str(chat_path)})
-        return cast(dict[str, object], payload)
+
+        return self._finalize_ingest(payload)
+
+    def _finalize_ingest(self, payload: dict[str, Any]) -> dict[str, object]:
+        cfg = load_app_config(self.project_root)
+        patterns = cfg.policies.privacy.redact_patterns
+        payload_redacted = {
+            key: redact_text(value, patterns) if isinstance(value, str) else redact_list(value, patterns)
+            for key, value in payload.items()
+        }
+        dump_json(self.layout.working_set / "intent_state.json", payload_redacted)
+        return cast(dict[str, object], payload_redacted)
 
     def diff_summary(self) -> list[str]:
         return recent_diff_summary(self.project_root)
@@ -232,8 +239,10 @@ class InfiniteContextService:
             self.layout.graph,
             self.layout.working_set,
         ]
-        if (not self.layout.root.exists()) or (not manifest_path.exists()) or any(
-            not path.exists() for path in required_dirs
+        if (
+            (not self.layout.root.exists())
+            or (not manifest_path.exists())
+            or any(not path.exists() for path in required_dirs)
         ):
             self.init()
         self.db.migrate()
@@ -281,49 +290,101 @@ class InfiniteContextService:
         return f"snap-{ts}-{uuid4().hex[:8]}"
 
     def _write_project_handoff(self, snapshot: Snapshot, prompt_text: str) -> None:
+        agents_dir = self.layout.agents
+        agents_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. Overview
+        overview_md = "\n".join(
+            [
+                "# Infinite Context - Project Overview",
+                f"- **Snapshot:** `{snapshot.id}`",
+                f"- **Branch:** `{snapshot.working_set.branch}`",
+                f"- **Developer Goal:** {snapshot.intent.developer_goal or 'None active'}",
+                f"- **Next Likely Action:** {snapshot.working_set.next_likely_action or 'None'}",
+                "",
+                "## Active Priority Files",
+                *[f"- `{path}`" for path in snapshot.working_set.active_files[:25]],
+            ]
+        )
+        (agents_dir / "overview.md").write_text(overview_md, encoding="utf-8")
+
+        # 2. Architecture
+        arch_md = ["# Project Architecture\n", "## Directory Map"]
+        for d, summary in snapshot.structural.directory_summaries.items():
+            arch_md.append(f"- **`{d}/`**: {summary}")
+        arch_md.extend(
+            [
+                "",
+                "## Key Files",
+                *[f"- `{f}`" for f in snapshot.structural.key_files],
+                "",
+                "## Entry Points",
+                *[f"- `{f}`" for f in snapshot.structural.entry_points],
+            ]
+        )
+        (agents_dir / "architecture.md").write_text("\n".join(arch_md), encoding="utf-8")
+
+        # 3. Decisions
+        decisions_md = ["# Architectural Decisions & Intent\n"]
+        if snapshot.intent.decisions:
+            decisions_md.extend([f"- {d}" for d in snapshot.intent.decisions])
+        else:
+            decisions_md.append("*No recent decisions recorded.*")
+        decisions_md.extend(
+            [
+                "",
+                "## Unresolved Issues",
+            ]
+        )
+        if snapshot.intent.unresolved_issues:
+            decisions_md.extend([f"- {i}" for i in snapshot.intent.unresolved_issues])
+        else:
+            decisions_md.append("*None*")
+        (agents_dir / "decisions.md").write_text("\n".join(decisions_md), encoding="utf-8")
+
+        # 4. Behavioral
+        behav_md = ["# Behavioral & Logic Patterns\n", "## Commands & Routes"]
+        behav_md.extend([f"- `{r}`" for r in snapshot.behavioral.routes_or_commands])
+        behav_md.extend(["", "## Test Surfaces"])
+        behav_md.extend([f"- `{t}`" for t in snapshot.behavioral.test_surfaces])
+        (agents_dir / "behavioral.md").write_text("\n".join(behav_md), encoding="utf-8")
+
+        # 5. Recent Changes
+        changes_md = ["# Recent Changes & Work State\n", "## Uncommitted Diffs"]
+        if snapshot.working_set.recent_diffs:
+            changes_md.extend([f"- {d}" for d in snapshot.working_set.recent_diffs[:30]])
+        else:
+            changes_md.append("*Workspace is clean.*")
+
+        if snapshot.working_set.last_failed_commands:
+            changes_md.extend(["", "## Broken State (Failed Commands)"])
+            changes_md.extend([f"- `{cmd}`" for cmd in snapshot.working_set.last_failed_commands])
+        (agents_dir / "recent_changes.md").write_text("\n".join(changes_md), encoding="utf-8")
+
+        # 6. Instructions format
+        instructions_md = "\n".join(
+            [
+                "# Infinite Context Agent Instructions",
+                "This project utilizes `infinitecontex` to maintain a canonical state memory.",
+                "As an AI agent, you must always consult the files in this directory "
+                "(`.infctx/agents/`) to understand the codebase.",
+                "",
+                "- Start with `overview.md` to know what the user is working on.",
+                "- Use `architecture.md` to map out the codebase instantly.",
+                "- Check `recent_changes.md` to see what broke or changed last.",
+                "- Obey the constraints in `decisions.md`.",
+            ]
+        )
+        (agents_dir / "instructions.md").write_text(instructions_md, encoding="utf-8")
+
+        # Also write the legacy single json/md for non-agent backward compat
         handoff_payload = {
             "snapshot_id": snapshot.id,
             "updated_at": datetime.now(UTC).isoformat(),
             "project_root": snapshot.project_root,
-            "branch": snapshot.working_set.branch,
-            "goal": snapshot.intent.developer_goal,
-            "next_action": snapshot.working_set.next_likely_action,
-            "active_files": snapshot.working_set.active_files[:25],
-            "recent_diffs": snapshot.working_set.recent_diffs[:25],
-            "decisions": snapshot.intent.decisions[:25],
-            "unresolved_issues": snapshot.intent.unresolved_issues[:25],
-            "prompt_path": str((self.layout.prompts / f"{snapshot.id}.prompt.md").relative_to(self.project_root)),
         }
         dump_json(self.layout.project / "inside.infinite_context.json", handoff_payload)
-
-        handoff_md = "\n".join(
-            [
-                "# Inside Infinite Context",
-                "",
-                f"Snapshot: {snapshot.id}",
-                f"Updated: {handoff_payload['updated_at']}",
-                f"Branch: {snapshot.working_set.branch}",
-                f"Goal: {snapshot.intent.developer_goal or 'n/a'}",
-                f"Next action: {snapshot.working_set.next_likely_action or 'n/a'}",
-                "",
-                "## Active Files",
-                *[f"- {path}" for path in snapshot.working_set.active_files[:25]],
-                "",
-                "## Recent Diffs",
-                *[f"- {line}" for line in snapshot.working_set.recent_diffs[:25]],
-                "",
-                "## Decisions",
-                *[f"- {item}" for item in snapshot.intent.decisions[:25]],
-                "",
-                "## Unresolved Issues",
-                *[f"- {item}" for item in snapshot.intent.unresolved_issues[:25]],
-                "",
-                "## Compact Restore Prompt",
-                "",
-                prompt_text,
-            ]
-        )
-        (self.layout.project / "inside.infinite_context.md").write_text(handoff_md, encoding="utf-8")
+        (self.layout.project / "inside.infinite_context.md").write_text(prompt_text, encoding="utf-8")
 
     def _branch(self) -> str:
         try:

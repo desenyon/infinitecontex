@@ -13,6 +13,7 @@ class InfctxLayout:
     root: Path
     metadata: Path
     project: Path
+    agents: Path
     snapshots: Path
     summaries: Path
     events: Path
@@ -30,6 +31,7 @@ def build_layout(project_root: Path) -> InfctxLayout:
         root=base,
         metadata=base / "metadata",
         project=base / "project",
+        agents=base / "agents",
         snapshots=base / "snapshots",
         summaries=base / "summaries",
         events=base / "events",

@@ -37,6 +37,7 @@ class StructuralContext(BaseModel):
     entry_points: list[str] = Field(default_factory=list)
     config_files: list[str] = Field(default_factory=list)
     env_files: list[str] = Field(default_factory=list)
+    directory_summaries: dict[str, str] = Field(default_factory=dict)
 
 
 class BehavioralContext(BaseModel):

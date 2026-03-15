@@ -1,22 +1,25 @@
 # Infinite Context
 
-Infinite Context is a local-first project memory engine for AI-assisted software development. It captures repository state, developer intent, architecture decisions, and working context into compact, structured handoff artifacts that can be consumed instantly by any coding agent or passed to a new developer joining the project.
+Infinite Context is a local-first **Total Manager** and project memory engine for AI-assisted software development. It captures repository state, developer intent, architectural decisions, and working context into a suite of highly-structured, discrete artifacts designed to perfectly sync any coding agent (Cursor, Copilot, Claude) or new developer.
 
-The problem it solves: AI coding sessions are stateless by default. Every new conversation starts from zero. Chat history is noisy and expensive to re-feed. Context files like CLAUDE.md degrade into markdown graveyards. Infinite Context replaces all of that with a single, always-current source of truth that is generated from your actual repository state rather than manually maintained.
+The problem it solves: AI coding sessions are stateless by default. Every new conversation starts from zero. Chat history is noisy. Context files like `CLAUDE.md` degrade into markdown graveyards. 
+
+**Infinite Context replaces all of that with a self-updating, intelligent source of truth.** It actively monitors your code, reads your directory structures, hunts down your IDE chat logs, and wires up your agent tools automatically.
 
 ## How It Works
 
-Running `infctx snapshot` scans the repository, compresses the structural and behavioral signal, and writes a canonical handoff file to `.infctx/project/inside.infinite_context.md`. The same data is available as `.infctx/project/inside.infinite_context.json` for programmatic consumption.
+Running `infctx snapshot` scans the repository, compresses the structural and behavioral signal, and automatically builds a mapped directory structure in `.infctx/agents/`. 
 
-Any coding agent (GitHub Copilot, Claude Code, Cursor, generic LLM) can open that file and immediately understand:
+By running `infctx setup-agent <cursor|claude|copilot|windsurf>`, your IDE is instantly hardwired to read this memory bank automatically. Any coding agent will instantly understand:
 
-- what the project does and how it is structured
-- what changed recently and what the developer was working on
-- which architectural decisions were made and why
-- which files are most relevant right now
-- what the next action should be
+- **\`overview.md\`**: What you are currently working on and your next likely action.
+- **\`architecture.md\`**: A live map of the codebase, including a synthesized analysis of "what each directory does".
+- **\`decisions.md\`**: Your running architectural decision log.
+- **\`recent_changes.md\`**: What broke recently, running stack traces, and uncommitted diffs.
+- **\`behavioral.md\`**: Mapped commands, routes, and logic tests.
+- **\`instructions.md\`**: Direct system prompt rules controlling how the AI must read the repository.
 
-The handoff file is regenerated on every snapshot and can be kept live with `infctx watch`.
+The memory bank regenerates on every snapshot and can be kept live with the real-time `infctx watch` heads-up display.
 
 ## Installation
 
@@ -110,7 +113,7 @@ Capture a full project snapshot and regenerate the handoff files.
 infctx snapshot [--goal TEXT] [--project-root PATH] [--json]
 ```
 
-This is the primary write operation. It scans the repository according to the active configuration, computes file relevance scores and structural context, writes the snapshot to the database, and regenerates `.infctx/project/inside.infinite_context.md` and `.infctx/project/inside.infinite_context.json`.
+This is the primary write operation. It intelligently scans the repository, computes file relevance scores, extracts deep directory semantics, writes the snapshot to the database, and regenerates the agent suite in `.infctx/agents/`.
 
 The `--goal` option records what the developer is currently working on. Setting a descriptive goal significantly improves the quality of generated restore prompts.
 
@@ -138,19 +141,37 @@ uv run infctx restore --snapshot-id snap_20240314_142301
 
 ---
 
+### setup-agent
+
+Wire your IDE AI agent automatically to Infinite Context memory.
+
+```
+infctx setup-agent [AGENT] [--project-root PATH]
+```
+
+Supported agents: `cursor`, `claude`, `copilot`, `windsurf`
+
+This command seamlessly drops the correctly formatted `.cursorrules`, `CLAUDE.md`, or `.github/copilot-instructions.md` directing the IDE to use the Infinite Context memory bank.
+
+```bash
+uv run infctx setup-agent cursor
+```
+
+---
+
 ### status
 
-Display current project status and snapshot metadata.
+Launch the interactive real-time project dashboard.
 
 ```
 infctx status [--project-root PATH] [--json]
 ```
 
-Shows the active snapshot ID, when it was taken, the developer goal recorded at that time, and a summary of captured file counts and token estimates.
+Shows the active snapshot ID, active branch, developer goals, pinned context, and a live tracking pane of uncommitted workspace diffs—all formatted beautifully using native `rich` UI elements.
 
 ```bash
 uv run infctx status
-uv run infctx status --json | jq .snapshot_id
+uv run infctx status --json | jq .latest_snapshot
 ```
 
 ---
@@ -189,23 +210,20 @@ The compiled prompt is also saved to `.infctx/prompts/` with a timestamped filen
 
 ### watch
 
-Monitor the repository for file changes and trigger automatic snapshots.
+Launch the live real-time HUD (Heads-Up Display) to monitor the repository and trigger auto-snapshots.
 
 ```
 infctx watch [--goal TEXT] [--project-root PATH] [--debounce-ms INT] [--min-interval-sec INT]
 ```
 
-Watches for file-system changes and runs a snapshot automatically after each quiet period. Keeps `.infctx/project/inside.infinite_context.md` continuously current while you work.
+Provides a live, updating terminal dashboard showing current active goals and the latest snapshot ID dynamically. Keeps `.infctx/agents/` perfectly synced to your keystrokes while you code.
 
 - `--debounce-ms` — wait this long after the last change before triggering a snapshot (default: 1200)
 - `--min-interval-sec` — minimum seconds between consecutive snapshots (default: 3)
 
 ```bash
-# Run in a separate terminal while working
+# Run in a separate terminal to act as your AI co-pilot HUD
 uv run infctx watch --goal "build the search ranking feature"
-
-# More aggressive refresh for fast iteration
-uv run infctx watch --goal "debugging" --debounce-ms 500 --min-interval-sec 1
 ```
 
 Stop with Ctrl+C.
@@ -292,16 +310,38 @@ Useful for quickly understanding what happened during a coding session before ta
 
 ### ingest-chat
 
-Import a saved chat session and extract decisions, goals, and relevant context from it.
+Extract context, decisions, and goals from an AI chat session.
 
 ```
-infctx ingest-chat --file PATH [--project-root PATH] [--json]
+infctx ingest-chat [--file PATH] [--auto] [--project-root PATH] [--json]
 ```
 
-Accepts a plain text or JSON export of a conversation. Parsed decisions are stored in the decision log. Useful for capturing the reasoning from a chat session after the fact.
+Use `--auto` to unleash the heuristic discovery engine. `infinitecontex` will aggressively hunt through your system for recent:
+- Cursor `workspaceStorage` session DBs
+- GitHub Copilot global histories
+- Claude local context files
+
+`ingest-chat` will automatically parse the most relevant conversation and extract the reasoning directly into your project's memory. No manual exports required.
 
 ```bash
+uv run infctx ingest-chat --auto
 uv run infctx ingest-chat --file ~/Downloads/session_export.txt
+```
+
+---
+
+### cleanup
+
+Safely prune old memory bloat.
+
+```
+infctx cleanup [--keep INT] [--project-root PATH]
+```
+
+Trims old unneeded snapshots down to the most recent `N` entries, unlinks legacy files, and natively executes a SQLite `VACUUM` to compress your memory database dynamically. 
+
+```bash
+uv run infctx cleanup --keep 10
 ```
 
 ---
