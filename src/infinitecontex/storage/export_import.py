@@ -21,4 +21,4 @@ def import_state(project_root: Path, archive_path: Path) -> None:
             member_path = (project_root / member.name).resolve()
             if not str(member_path).startswith(str(base)):
                 raise ValueError(f"archive contains unsafe path: {member.name}")
-        tar.extractall(project_root)
+        tar.extractall(project_root, filter="data")
