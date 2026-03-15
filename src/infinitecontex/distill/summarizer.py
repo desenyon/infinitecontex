@@ -14,6 +14,16 @@ def _estimate_tokens(text: str) -> int:
     return max(1, int(len(text) / 4))
 
 
+def _trim_text(text: str, max_chars: int) -> str:
+    if max_chars <= 0:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    if max_chars <= 3:
+        return text[:max_chars]
+    return text[: max_chars - 3].rstrip() + "..."
+
+
 def _fit_budget(sections: list[str], budget: int) -> list[str]:
     kept: list[str] = []
     used = 0
@@ -85,14 +95,28 @@ def compile_packet(snapshot: Snapshot, budget: int) -> ContextPacket:
         # Always keep at least a compact project card.
         kept = [project_card[: max(120, budget * 4)]]
 
+    total_char_budget = max(240, budget * 4)
+    section_budgets = [
+        int(total_char_budget * 0.24),
+        int(total_char_budget * 0.18),
+        int(total_char_budget * 0.18),
+        int(total_char_budget * 0.18),
+        int(total_char_budget * 0.10),
+        int(total_char_budget * 0.12),
+    ]
+    trimmed_kept = [
+        _trim_text(section, section_budgets[idx]) if idx < len(section_budgets) else section
+        for idx, section in enumerate(kept)
+    ]
+
     # Build packet from kept sections while preserving shape.
-    while len(kept) < 6:
-        kept.append("")
+    while len(trimmed_kept) < 6:
+        trimmed_kept.append("")
 
     return ContextPacket(
-        project_card=kept[0],
-        subsystem_packets={"structure": kept[1], "behavior": kept[2]},
-        working_set_packet=kept[3],
-        decisions_packet=kept[4],
-        restore_brief=kept[5],
+        project_card=trimmed_kept[0],
+        subsystem_packets={"structure": trimmed_kept[1], "behavior": trimmed_kept[2]},
+        working_set_packet=trimmed_kept[3],
+        decisions_packet=trimmed_kept[4],
+        restore_brief=trimmed_kept[5],
     )
