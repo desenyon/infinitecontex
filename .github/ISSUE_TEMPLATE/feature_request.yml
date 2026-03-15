@@ -16,3 +16,13 @@ body:
       label: Proposed Solution
     validations:
       required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints
+      description: Note token budget, privacy, portability, UX, or storage constraints.
+  - type: textarea
+    id: success
+    attributes:
+      label: Success Criteria
+      description: How should we know this is done?
