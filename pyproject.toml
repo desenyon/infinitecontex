@@ -31,6 +31,11 @@ dependencies = [
   "watchfiles>=1.0.4",
 ]
 
+[project.urls]
+Homepage = "https://github.com/desenyon/infinitecontex"
+Repository = "https://github.com/desenyon/infinitecontex"
+Issues = "https://github.com/desenyon/infinitecontex/issues"
+
 [project.optional-dependencies]
 dev = [
   "pytest>=8.3.4",
