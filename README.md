@@ -1,39 +1,49 @@
 # Infinite Context
 
-Infinite Context is a local-first project memory engine for software teams using AI coding agents.
+Infinite Context is a local-first, agent-ready project memory engine for serious software repositories.
 
-It continuously compiles repo structure, behavior, intent, and active working state into compact context artifacts that can be restored quickly on any machine, branch, IDE, or agent.
+It turns repo structure, behavioral hints, developer intent, and active working state into compact, durable handoff artifacts that survive editor changes, branch switches, machine hops, and agent restarts.
 
-## Why It Exists
+## What You Get
 
-- AI coding sessions lose critical context between machines and tools.
-- Raw chat logs are noisy, expensive, and fragile.
-- Developers need deterministic, low-token, portable context handoff.
+Once initialized, the repository maintains a canonical handoff file that another coding agent can open and immediately understand:
 
-## Core Outcome
+- what the project is
+- what changed recently
+- what decisions were made
+- what files matter now
+- what to do next
 
-After initialization, any agent can read one canonical file and know exactly:
-
-- what this project is,
-- where work stopped,
-- what changed recently,
-- what to do next.
-
-Canonical handoff file:
+Canonical handoff artifacts:
 
 - `.infctx/project/inside.infinite_context.md`
 - `.infctx/project/inside.infinite_context.json`
 
-These files are regenerated on each snapshot and are designed for direct agent consumption.
+These are regenerated on snapshot and continuously refreshed in watch mode.
 
-## Install (UV-first)
+## Why It Matters
+
+- AI coding sessions lose context too easily.
+- Raw chat history is expensive, noisy, and brittle.
+- Teams need low-token, deterministic, portable context restoration.
+
+Infinite Context compiles context instead of dumping it.
+
+## Install
+
+UV-first workflow:
 
 ```bash
-uv venv
 uv sync --extra dev
 ```
 
-Alternative:
+Run commands through UV:
+
+```bash
+uv run infctx --help
+```
+
+Fallback virtualenv workflow:
 
 ```bash
 python -m venv .venv
@@ -43,70 +53,82 @@ python -m venv .venv
 ## Quick Start
 
 ```bash
-infctx init
-infctx snapshot --goal "stabilize parser performance"
-infctx status --json
-infctx prompt --mode generic-agent-restore --token-budget 1200
+uv run infctx init
+uv run infctx snapshot --goal "stabilize parser performance"
+uv run infctx status --json
+uv run infctx prompt --mode generic-agent-restore --token-budget 1200
 ```
 
-## Continuous Updates
+## Continuous Context Updates
 
-Run watch mode to update snapshots automatically while you work:
+Keep the project handoff current while you work:
 
 ```bash
-infctx watch --goal "active development" --debounce-ms 1200
+uv run infctx watch --goal "active development" --debounce-ms 1200
 ```
 
-This keeps handoff files current whenever files are saved.
+This is the recommended default operational mode for active repositories.
 
-## Recommended Agent Flow
+## Agent Workflow
 
-1. Agent reads `.infctx/project/inside.infinite_context.md`
-2. Agent reviews latest prompt in `.infctx/prompts/`
-3. Agent executes next action from handoff file
+1. Open `.infctx/project/inside.infinite_context.md`.
+2. Inspect the latest generated prompt in `.infctx/prompts/` if deeper restore context is needed.
+3. Continue from the recorded next action and active files.
 
-## Production Features
+## Core Capabilities
 
-- Local-first by default (no silent uploads)
+- Local-first state storage under `.infctx/`
 - Token-budgeted prompt compilation
-- Config-aware include/exclude scanning
-- Decision and pin memory
-- Restore divergence checks (stale/missing/changed/valid)
-- FTS retrieval index over snapshots and ingested context
-- Structured diagnostics via `infctx doctor`
-
-## Configuration
-
-Set repo config:
-
-```bash
-infctx config --set-file config/default.json
-```
-
-Key controls:
-
-- `include_patterns`
-- `exclude_patterns`
-- token/summarization/privacy policy blocks
+- Config-aware scanning with include and exclude rules
+- Decision memory and pinning
+- Restore divergence checks for stale, changed, missing, and valid state
+- SQLite-backed metadata and retrieval index
+- Structured event logging and doctor diagnostics
+- Background watch mode for iterative refresh on save
 
 ## Commands
 
-- `infctx init`
-- `infctx snapshot`
-- `infctx restore`
-- `infctx status`
-- `infctx prompt`
-- `infctx search`
-- `infctx decisions`
-- `infctx note`
-- `infctx pin`
-- `infctx ingest-chat`
-- `infctx export`
-- `infctx import`
-- `infctx doctor`
-- `infctx config`
-- `infctx watch`
+- `uv run infctx init`
+- `uv run infctx snapshot`
+- `uv run infctx restore`
+- `uv run infctx status`
+- `uv run infctx prompt`
+- `uv run infctx search`
+- `uv run infctx decisions`
+- `uv run infctx note`
+- `uv run infctx pin`
+- `uv run infctx ingest-chat`
+- `uv run infctx export`
+- `uv run infctx import`
+- `uv run infctx doctor`
+- `uv run infctx config`
+- `uv run infctx watch`
+
+## Configuration
+
+Apply the repo-local default config:
+
+```bash
+uv run infctx config --set-file config/default.json
+```
+
+Most important controls:
+
+- `capture_max_files`
+- `include_patterns`
+- `exclude_patterns`
+- token, summarization, and privacy policy blocks
+
+## Validation
+
+```bash
+uv sync --extra dev
+uv run ruff check .
+uv run mypy src
+uv run pytest -q
+uv run python -m build
+```
 
 ## Documentation
 
-See `docs/` for architecture, data model, storage layout, restore behavior, security model, testing, and release policy.
+See `docs/` for architecture, storage, restore semantics, CLI contract, testing strategy, observability, and release policy.
