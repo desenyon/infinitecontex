@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Infinite Context Agent Commands",
+  "type": "object",
+  "properties": {
+    "tool": {
+      "type": "string",
+      "enum": ["snapshot", "restore", "prompt", "search"]
+    },
+    "arguments": {
+      "type": "object"
+    }
+  },
+  "required": ["tool", "arguments"]
+}
