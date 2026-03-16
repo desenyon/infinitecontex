@@ -3,11 +3,19 @@
 Contract principles:
 
 - Commands are local-first and deterministic.
-- `--json` mode returns machine-readable payloads.
-- Human mode stays concise and action-oriented.
-- Commands must fail loudly on invalid snapshot/config references.
+- Human-readable output should explain what happened, not just dump raw values.
+- `--json` output should remain machine-readable and stable within the minor version.
+- Invalid input and missing prerequisites must fail loudly with actionable errors.
+
+Workflow expectations in 0.2.0:
+
+- `session` is the preferred live command.
+- `watch` remains available as a compatibility alias.
+- `session --once --json` returns a one-shot session payload suitable for automation.
+- Long-running commands should show progress or live state when possible.
 
 Compatibility expectations:
 
-- Backward-compatible command names and flags within minor versions.
-- Changes to output schema require release note and version bump.
+- Existing top-level command names remain available within the 0.2.x line.
+- New fields may be added to JSON payloads in backward-compatible ways.
+- Removing commands, breaking flags, or changing storage schema requires a documented version bump.
