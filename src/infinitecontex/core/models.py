@@ -30,6 +30,12 @@ class FileFingerprint(BaseModel):
     sha1: str
 
 
+class FileInsight(BaseModel):
+    path: str
+    summary: str = ""
+    symbols: list[str] = Field(default_factory=list)
+
+
 class StructuralContext(BaseModel):
     repo_tree_top: list[str] = Field(default_factory=list)
     key_files: list[str] = Field(default_factory=list)
@@ -38,6 +44,7 @@ class StructuralContext(BaseModel):
     config_files: list[str] = Field(default_factory=list)
     env_files: list[str] = Field(default_factory=list)
     directory_summaries: dict[str, str] = Field(default_factory=dict)
+    file_insights: list[FileInsight] = Field(default_factory=list)
 
 
 class BehavioralContext(BaseModel):
@@ -54,6 +61,8 @@ class IntentContext(BaseModel):
     assumptions: list[str] = Field(default_factory=list)
     active_tasks: list[str] = Field(default_factory=list)
     unresolved_issues: list[str] = Field(default_factory=list)
+    open_questions: list[str] = Field(default_factory=list)
+    signal_sources: dict[str, list[str]] = Field(default_factory=dict)
     inferred_change_purpose: str = ""
 
 
