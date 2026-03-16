@@ -19,7 +19,16 @@ def build_working_set(
     active_files = git_status_files(project_root)
     diffs = recent_diff_summary(project_root)
 
-    next_action = "review failing tests" if failing_tests else "continue active branch changes"
+    if failing_tests:
+        next_action = "review failing tests"
+    elif last_failed_commands:
+        next_action = "fix the last failed command"
+    elif active_files:
+        next_action = f"continue working in {active_files[0]}"
+    elif pins:
+        next_action = f"review pinned context in {pins[0]}"
+    else:
+        next_action = "capture a fresh session goal before making changes"
 
     return WorkingSetContext(
         branch=current_branch(project_root),
