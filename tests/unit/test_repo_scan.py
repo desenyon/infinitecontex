@@ -1,7 +1,11 @@
+from __future__ import annotations
+
+from pathlib import Path
+
 from infinitecontex.capture.repo_scan import scan_behavioral, scan_structural
 
 
-def test_scan_structural_directory_summaries(tmp_path):
+def test_scan_structural_directory_summaries(tmp_path: Path) -> None:
     # Setup directories
     d1 = tmp_path / "mod_a"
     d1.mkdir()
@@ -52,7 +56,7 @@ def test_scan_structural_directory_summaries(tmp_path):
     assert "__main__.py" in struct.entry_points
 
 
-def test_scan_structural_max_files(tmp_path):
+def test_scan_structural_max_files(tmp_path: Path) -> None:
     for i in range(5):
         (tmp_path / f"f_{i}.py").write_text("")
 
@@ -61,7 +65,7 @@ def test_scan_structural_max_files(tmp_path):
     assert len(fingerprints) == 2
 
 
-def test_scan_structural_collects_file_insights(tmp_path):
+def test_scan_structural_collects_file_insights(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text("# Demo\nUseful project summary.\n", encoding="utf-8")
     (tmp_path / "app.py").write_text(
         '"""CLI entrypoint."""\n\n\ndef run_app():\n    return "ok"\n',
@@ -77,7 +81,7 @@ def test_scan_structural_collects_file_insights(tmp_path):
     assert "run_app" in app_insight.symbols
 
 
-def test_scan_structural_include_miss(tmp_path):
+def test_scan_structural_include_miss(tmp_path: Path) -> None:
     f = tmp_path / "test.txt"
     f.write_text("")
 
@@ -99,7 +103,7 @@ def test_scan_structural_include_miss(tmp_path):
     assert "hidden_dir/file.py" not in names
 
 
-def test_scan_structural_deleted_dir(tmp_path):
+def test_scan_structural_deleted_dir(tmp_path: Path) -> None:
     d = tmp_path / "temp_mod"
     d.mkdir()
     (d / "file.py").write_text("")
@@ -112,7 +116,7 @@ def test_scan_structural_deleted_dir(tmp_path):
         assert "temp_mod" not in struct.directory_summaries
 
 
-def test_scan_behavioral(tmp_path):
+def test_scan_behavioral(tmp_path: Path) -> None:
     (tmp_path / "app_test.py").write_text("")
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "unit.py").write_text("")
