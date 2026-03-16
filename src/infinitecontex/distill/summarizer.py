@@ -24,18 +24,6 @@ def _trim_text(text: str, max_chars: int) -> str:
     return text[: max_chars - 3].rstrip() + "..."
 
 
-def _fit_budget(sections: list[str], budget: int) -> list[str]:
-    kept: list[str] = []
-    used = 0
-    for section in sections:
-        tokens = _estimate_tokens(section)
-        if used + tokens > budget:
-            break
-        kept.append(section)
-        used += tokens
-    return kept
-
-
 def compile_packet(snapshot: Snapshot, budget: int) -> ContextPacket:
     project_card = (
         f"Project root: {snapshot.project_root}\n"
@@ -47,6 +35,12 @@ def compile_packet(snapshot: Snapshot, budget: int) -> ContextPacket:
     structural_lines = [
         "Key files:",
         *[f"- {p}" for p in _truncate_lines(snapshot.structural.key_files, 20)],
+        "Key file insights:",
+        *[
+            f"- {insight.path}: {insight.summary}"
+            + (f" ({', '.join(insight.symbols[:4])})" if insight.symbols else "")
+            for insight in snapshot.structural.file_insights[:10]
+        ],
         "Config files:",
         *[f"- {p}" for p in _truncate_lines(snapshot.structural.config_files, 20)],
         "Env files:",
@@ -88,7 +82,14 @@ def compile_packet(snapshot: Snapshot, budget: int) -> ContextPacket:
         ]
     )
 
-    decisions_packet = "\n".join(["Decisions:", *[f"- {d}" for d in _truncate_lines(snapshot.intent.decisions, 20)]])
+    decisions_packet = "\n".join(
+        [
+            "Decisions:",
+            *[f"- {d}" for d in _truncate_lines(snapshot.intent.decisions, 20)],
+            "Open questions:",
+            *[f"- {q}" for q in _truncate_lines(snapshot.intent.open_questions, 10)],
+        ]
+    )
 
     restore_brief = "\n".join(
         [
@@ -100,13 +101,6 @@ def compile_packet(snapshot: Snapshot, budget: int) -> ContextPacket:
         ]
     )
 
-    sections = [project_card, *subsystem_packets.values(), working_set_packet, decisions_packet, restore_brief]
-    kept = _fit_budget(sections, budget)
-
-    if not kept:
-        # Always keep at least a compact project card.
-        kept = [project_card[: max(120, budget * 4)]]
-
     total_char_budget = max(240, budget * 4)
     section_budgets = [
         int(total_char_budget * 0.24),
@@ -116,14 +110,11 @@ def compile_packet(snapshot: Snapshot, budget: int) -> ContextPacket:
         int(total_char_budget * 0.10),
         int(total_char_budget * 0.12),
     ]
+    sections = [project_card, *subsystem_packets.values(), working_set_packet, decisions_packet, restore_brief]
     trimmed_kept = [
         _trim_text(section, section_budgets[idx]) if idx < len(section_budgets) else section
-        for idx, section in enumerate(kept)
+        for idx, section in enumerate(sections)
     ]
-
-    # Build packet from kept sections while preserving shape.
-    while len(trimmed_kept) < 6:
-        trimmed_kept.append("")
 
     return ContextPacket(
         project_card=trimmed_kept[0],
