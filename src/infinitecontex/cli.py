@@ -2,18 +2,21 @@
 
 from __future__ import annotations
 
+import fnmatch
 import time
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Callable
 
 import orjson
 import typer
 from rich.console import Console
+from rich.live import Live
 from rich.panel import Panel
+from rich.spinner import Spinner
 from rich.table import Table
-from watchfiles import watch
+from watchfiles import Change, watch
 
-from infinitecontex.core.config import AppConfig
+from infinitecontex.core.config import AppConfig, load_app_config
 from infinitecontex.core.models import PromptMode
 from infinitecontex.service import InfiniteContextService
 from infinitecontex.version import __version__
@@ -37,6 +40,58 @@ def main(
 
 def _service(project_root: Path | None) -> InfiniteContextService:
     return InfiniteContextService((project_root or Path.cwd()).resolve())
+
+
+def _print_error(message: str) -> None:
+    console.print(Panel(message, title="Error", border_style="red", expand=False))
+
+
+def _run_action(
+    callback: Callable[[], object],
+    *,
+    as_json: bool = False,
+    format_type: str = "generic",
+    progress_message: str | None = None,
+    emit: bool = True,
+) -> object:
+    try:
+        if progress_message:
+            with console.status(progress_message):
+                payload = callback()
+        else:
+            payload = callback()
+    except Exception as exc:
+        _print_error(str(exc))
+        raise typer.Exit(1) from exc
+
+    if emit:
+        _emit(payload, as_json, format_type)
+    return payload
+
+
+def _matches_pattern(rel_path: str, patterns: list[str]) -> bool:
+    for pattern in patterns:
+        if pattern.endswith("/**"):
+            prefix = pattern[: -len("/**")].rstrip("/")
+            if rel_path == prefix or rel_path.startswith(prefix + "/"):
+                return True
+        if fnmatch.fnmatch(rel_path, pattern):
+            return True
+    return False
+
+
+def _filter_watch_changes(changes: set[tuple[Change, str]], root: Path, exclude_patterns: list[str]) -> list[str]:
+    relevant: list[str] = []
+    for _, changed_path in changes:
+        try:
+            rel_path = Path(changed_path).resolve().relative_to(root).as_posix()
+        except Exception:
+            continue
+        if _matches_pattern(rel_path, exclude_patterns):
+            continue
+        if rel_path not in relevant:
+            relevant.append(rel_path)
+    return sorted(relevant)[:12]
 
 
 def _format_dict(d: dict[str, object], title: str) -> Panel:
@@ -86,6 +141,9 @@ def _emit(payload: object, as_json: bool, format_type: str = "generic") -> None:
             root_dir = payload.get("project_root", "")
             pins = payload.get("pins", [])
             commits = payload.get("recent_commits", [])
+            developer_goal = payload.get("developer_goal") or "None"
+            active_tasks = payload.get("active_tasks", [])
+            unresolved = payload.get("unresolved_issues", [])
 
             dash_table = Table.grid(padding=1)
             dash_table.add_column(style="bold cyan", justify="right")
@@ -93,9 +151,16 @@ def _emit(payload: object, as_json: bool, format_type: str = "generic") -> None:
             dash_table.add_row("Root:", str(root_dir))
             dash_table.add_row("Branch:", f"[green]{branch}[/green]")
             dash_table.add_row("Memory:", f"[magenta]{latest}[/magenta]")
+            dash_table.add_row("Goal:", str(developer_goal))
 
             pin_text = "\n".join(f"• {p}" for p in pins) if pins else "[dim]No active pins.[/dim]"
             commit_text = "\n".join(f"• {c}" for c in commits) if commits else "[dim]No recent commits.[/dim]"
+            task_text = (
+                "\n".join(f"• {item}" for item in active_tasks)
+                if active_tasks
+                else "[dim]No active tasks.[/dim]"
+            )
+            issue_text = "\n".join(f"• {item}" for item in unresolved) if unresolved else "[dim]No open issues.[/dim]"
 
             cols = Columns(
                 [
@@ -107,9 +172,21 @@ def _emit(payload: object, as_json: bool, format_type: str = "generic") -> None:
                         padding=(1, 2),
                     ),
                     Panel(
+                        task_text,
+                        title="[bold green]Active Tasks[/bold green]",
+                        border_style="green",
+                        padding=(1, 2),
+                    ),
+                    Panel(
                         commit_text,
                         title="[bold magenta]Recent Commits[/bold magenta]",
                         border_style="magenta",
+                        padding=(1, 2),
+                    ),
+                    Panel(
+                        issue_text,
+                        title="[bold red]Open Issues[/bold red]",
+                        border_style="red",
                         padding=(1, 2),
                     ),
                 ],
@@ -134,7 +211,17 @@ def _emit(payload: object, as_json: bool, format_type: str = "generic") -> None:
         elif format_type == "config":
             console.print(_format_dict(payload, "Configuration"))
         elif format_type == "ingest_chat":
-            console.print(_format_dict(payload, "Chat Ingestion Result"))
+            summary = {
+                "developer_goal": payload.get("developer_goal", ""),
+                "active_tasks": payload.get("active_tasks", []),
+                "decisions": payload.get("decisions", []),
+                "unresolved_issues": payload.get("unresolved_issues", []),
+                "selected_source": payload.get("selected_source"),
+                "selected_path": payload.get("selected_path"),
+            }
+            console.print(_format_dict(summary, "Chat Ingestion Result"))
+        elif format_type == "session":
+            console.print(_format_dict(payload, "Session Capture"))
         elif format_type == "restore":
             console.print(_format_dict(payload, "Restore Report"))
         elif format_type == "diff_summary":
@@ -177,10 +264,10 @@ def _emit(payload: object, as_json: bool, format_type: str = "generic") -> None:
                 for idx, item in enumerate(payload):
                     title_str = (
                         f"[bold cyan]Result {idx + 1}[/bold cyan] | "
-                        f"{item.get('source_type', '')} - {item.get('source_id', '')}"
+                        f"{item.get('source', '')} - {item.get('key', '')}"
                     )
                     p = Panel(
-                        item.get("content", ""),
+                        item.get("snippet", ""),
                         title=title_str,
                         border_style="magenta",
                     )
@@ -197,8 +284,7 @@ def init(
     project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
     json: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    out = _service(project_root).init()
-    _emit(out, json, "init")
+    _run_action(lambda: _service(project_root).init(), as_json=json, format_type="init")
 
 
 @app.command()
@@ -207,8 +293,12 @@ def snapshot(
     project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
     json: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    snap = _service(project_root).snapshot(goal=goal)
-    _emit(snap.model_dump(mode="json"), json, "snapshot")
+    _run_action(
+        lambda: _service(project_root).snapshot(goal=goal).model_dump(mode="json"),
+        as_json=json,
+        format_type="snapshot",
+        progress_message="Capturing project context...",
+    )
 
 
 @app.command()
@@ -217,8 +307,12 @@ def restore(
     project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
     json: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    out = _service(project_root).restore(snapshot_id=snapshot_id)
-    _emit(out, json, "restore")
+    _run_action(
+        lambda: _service(project_root).restore(snapshot_id=snapshot_id),
+        as_json=json,
+        format_type="restore",
+        progress_message="Validating restore state...",
+    )
 
 
 @app.command("setup-agent")
@@ -258,8 +352,7 @@ def status(
     project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
     json: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    out = _service(project_root).status()
-    _emit(out, json, "status")
+    _run_action(lambda: _service(project_root).status(), as_json=json, format_type="status")
 
 
 @app.command()
@@ -271,8 +364,10 @@ def note(
     tags: Annotated[list[str] | None, typer.Option("--tag")] = None,
     project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
 ) -> None:
-    decision_id = _service(project_root).note(summary, rationale, alternatives or [], impact, tags or [])
-    console.print(f"saved decision: {decision_id}")
+    decision_id = _run_action(
+        lambda: _service(project_root).note(summary, rationale, alternatives or [], impact, tags or [])
+    )
+    console.print(Panel(f"Saved decision `{decision_id}`", border_style="green", expand=False))
 
 
 @app.command()
@@ -281,8 +376,8 @@ def pin(
     note: Annotated[str, typer.Option("--note")] = "",
     project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
 ) -> None:
-    _service(project_root).pin(path, note)
-    console.print(f"pinned: {path}")
+    _run_action(lambda: _service(project_root).pin(path, note))
+    console.print(Panel(f"Pinned `{path}`", border_style="green", expand=False))
 
 
 @app.command("ingest-chat")
@@ -293,26 +388,48 @@ def ingest_chat(
     json: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
     if not chat_file and not auto:
-        console.print("[red]Error:[/red] Must provide either --file or --auto")
+        _print_error("Must provide either `--file` or `--auto`.")
         raise typer.Exit(1)
 
     svc = _service(project_root)
     if auto:
         from infinitecontex.capture.chat_auto_discover import auto_ingest_chat
 
-        console.print("[dim]Scanning system for recent AI coding chat logs...[/dim]")
-        context = auto_ingest_chat()
-        if not any(context.values()):
-            console.print("[yellow]No relevant chat context could be automatically discovered.[/yellow]")
+        context = _run_action(
+            auto_ingest_chat,
+            progress_message="Scanning local AI chat sources...",
+            emit=False,
+        )
+        if not isinstance(context, dict):
+            _print_error("Auto-discovery did not return a usable payload.")
+            raise typer.Exit(1)
+        if context.get("selected_source") is None:
+            console.print("[yellow]No local chat source could be discovered.[/yellow]")
             return
 
-        out = svc._finalize_ingest(context)
+        persistable_keys = {
+            "developer_goal",
+            "decisions",
+            "assumptions",
+            "active_tasks",
+            "unresolved_issues",
+            "open_questions",
+            "signal_sources",
+            "selected_source",
+            "selected_path",
+            "checked_sources",
+        }
+        out = svc.ingest_chat_payload({key: context.get(key) for key in [*persistable_keys, "source_text"]})
         _emit(out, json, "ingest_chat")
     else:
         if chat_file is None:
             raise typer.Exit(1)
-        out = svc.ingest_chat(chat_file)
-        _emit(out, json, "ingest_chat")
+        _run_action(
+            lambda: svc.ingest_chat(chat_file),
+            as_json=json,
+            format_type="ingest_chat",
+            progress_message="Ingesting chat transcript...",
+        )
 
 
 @app.command("diff-summary")
@@ -320,8 +437,11 @@ def diff_summary(
     project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
     json: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    out = _service(project_root).diff_summary()
-    _emit({"diff_summary": out}, json, "diff_summary")
+    _run_action(
+        lambda: {"diff_summary": _service(project_root).diff_summary()},
+        as_json=json,
+        format_type="diff_summary",
+    )
 
 
 @app.command()
@@ -330,8 +450,7 @@ def decisions(
     project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
     json: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    out = _service(project_root).decisions_recent(limit)
-    _emit(out, json, "decisions")
+    _run_action(lambda: _service(project_root).decisions_recent(limit), as_json=json, format_type="decisions")
 
 
 @app.command()
@@ -341,8 +460,7 @@ def search(
     project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
     json: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    out = _service(project_root).search(query, limit)
-    _emit(out, json, "search")
+    _run_action(lambda: _service(project_root).search(query, limit), as_json=json, format_type="search")
 
 
 @app.command()
@@ -352,8 +470,10 @@ def prompt(
     snapshot_id: Annotated[str | None, typer.Option("--snapshot-id")] = None,
     project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
 ) -> None:
-    out = _service(project_root).prompt(mode, token_budget, snapshot_id)
-    console.print(out)
+    _run_action(
+        lambda: _service(project_root).prompt(mode, token_budget, snapshot_id),
+        progress_message="Compiling handoff prompt...",
+    )
 
 
 @app.command()
@@ -361,8 +481,8 @@ def export(
     output: Annotated[Path, typer.Option("--output")],
     project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
 ) -> None:
-    out = _service(project_root).export(output)
-    console.print(str(out))
+    out = _run_action(lambda: _service(project_root).export(output), progress_message="Exporting local state...")
+    console.print(Panel(f"Exported archive to `{out}`", border_style="green", expand=False))
 
 
 @app.command("import")
@@ -370,8 +490,8 @@ def import_cmd(
     archive: Annotated[Path, typer.Option("--archive")],
     project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
 ) -> None:
-    _service(project_root).import_archive(archive)
-    console.print("import complete")
+    _run_action(lambda: _service(project_root).import_archive(archive), progress_message="Importing local state...")
+    console.print(Panel("Import complete", border_style="green", expand=False))
 
 
 @app.command()
@@ -379,8 +499,7 @@ def doctor(
     project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
     json: Annotated[bool, typer.Option("--json")] = False,
 ) -> None:
-    out = _service(project_root).doctor()
-    _emit(out, json, "doctor")
+    _run_action(lambda: _service(project_root).doctor(), as_json=json, format_type="doctor")
 
 
 @app.command()
@@ -391,36 +510,118 @@ def config(
 ) -> None:
     svc = _service(project_root)
     if set_file:
+        resolved_set_file = set_file
+        if not resolved_set_file.is_absolute() and project_root is not None:
+            candidate = (project_root / resolved_set_file).resolve()
+            if candidate.exists():
+                resolved_set_file = candidate
         try:
-            cfg = AppConfig.model_validate(orjson.loads(set_file.read_bytes()))
-            svc.config_set(cfg)
-            console.print(
-                Panel("[green]Configuration updated successfully[/green]", border_style="green", expand=False)
-            )
-        except FileNotFoundError:
-            console.print(
-                Panel(
-                    f"[red]Error:[/red] The configuration file '{set_file}' was not found.",
-                    title="Error",
-                    border_style="red",
-                    expand=False,
-                )
-            )
-            raise typer.Exit(1)
-        except Exception as e:
-            console.print(
-                Panel(
-                    f"[red]Error:[/red] Failed to load configuration: {e}",
-                    title="Error",
-                    border_style="red",
-                    expand=False,
-                )
-            )
-            raise typer.Exit(1)
+            cfg = AppConfig.model_validate(orjson.loads(resolved_set_file.read_bytes()))
+        except FileNotFoundError as exc:
+            _print_error(f"The configuration file `{resolved_set_file}` was not found.")
+            raise typer.Exit(1) from exc
+        except Exception as exc:
+            _print_error(f"Failed to load configuration: {exc}")
+            raise typer.Exit(1) from exc
+        _run_action(lambda: svc.config_set(cfg))
+        console.print(Panel("Configuration updated successfully", border_style="green", expand=False))
         return
 
-    out = svc.config_get()
-    _emit(out, json, "config")
+    _run_action(lambda: svc.config_get(), as_json=json, format_type="config")
+
+
+@app.command()
+def session(
+    goal: Annotated[str, typer.Option("--goal", help="Goal used for structured session captures")] = "",
+    project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
+    debounce_ms: Annotated[int, typer.Option("--debounce-ms")] = 1200,
+    min_interval_sec: Annotated[int, typer.Option("--min-interval-sec")] = 3,
+    once: Annotated[bool, typer.Option("--once", help="Capture the initial session snapshot and exit")] = False,
+    json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    svc = _service(project_root)
+    root = (project_root or Path.cwd()).resolve()
+    cfg = load_app_config(root)
+    svc.init()
+
+    initial_snapshot = _run_action(
+        lambda: svc.snapshot(goal=goal),
+        progress_message="Starting structured session...",
+        emit=False,
+    )
+    if not hasattr(initial_snapshot, "id"):
+        _print_error("Failed to create the initial session snapshot.")
+        raise typer.Exit(1)
+
+    session_payload = {
+        "project_root": str(root),
+        "goal": getattr(initial_snapshot, "intent").developer_goal or goal,
+        "snapshot_id": getattr(initial_snapshot, "id"),
+        "changed_paths": [],
+        "mode": "once" if once else "live",
+    }
+    if once:
+        _emit(session_payload, json, "session")
+        return
+    if json:
+        _print_error("`session --json` is only supported together with `--once`.")
+        raise typer.Exit(1)
+
+    import datetime
+
+    from rich.align import Align
+
+    exclude_patterns = list(dict.fromkeys([*cfg.exclude_patterns, ".infctx/**"]))
+    session_goal = getattr(initial_snapshot, "intent").developer_goal or goal or "None"
+    last_snapshot_id = getattr(initial_snapshot, "id")
+    last_snapshot_ts = time.time()
+    last_trigger = "initial snapshot"
+    last_changed_paths: list[str] = []
+    skipped_batches = 0
+
+    def generate_dashboard() -> Panel:
+        table = Table.grid(padding=(0, 2))
+        table.add_column(style="cyan", justify="right")
+        table.add_column(style="white")
+        table.add_row("Root:", str(root))
+        table.add_row("Goal:", f"[bold green]{session_goal}[/bold green]")
+        table.add_row("Last Snapshot:", f"[bold magenta]{last_snapshot_id}[/bold magenta]")
+        table.add_row("Last Trigger:", last_trigger)
+        table.add_row("Skipped:", str(skipped_batches))
+        table.add_row("Recent Changes:", "\n".join(last_changed_paths) if last_changed_paths else "[dim]Waiting[/dim]")
+        table.add_row("Status:", Spinner("dots", text="[yellow]Watching filtered project changes...[/yellow]"))
+        return Panel(
+            Align.center(table),
+            title=f"[bold]Infinite Context Session[/bold] • {datetime.datetime.now().strftime('%H:%M:%S')}",
+            border_style="cyan",
+        )
+
+    with Live(generate_dashboard(), refresh_per_second=4) as live:
+        for changes in watch(root, debounce=debounce_ms):
+            relevant_changes = _filter_watch_changes(changes, root, exclude_patterns)
+            if not relevant_changes:
+                continue
+            now = time.time()
+            if now - last_snapshot_ts < min_interval_sec:
+                skipped_batches += 1
+                last_trigger = "cooldown skip"
+                last_changed_paths = relevant_changes
+                live.update(generate_dashboard())
+                continue
+
+            try:
+                snap = svc.snapshot(goal=goal)
+            except Exception as exc:
+                skipped_batches += 1
+                last_trigger = f"snapshot failed: {exc}"
+                last_changed_paths = relevant_changes
+                live.update(generate_dashboard())
+                continue
+            last_snapshot_ts = now
+            last_snapshot_id = snap.id
+            last_trigger = "file changes"
+            last_changed_paths = relevant_changes
+            live.update(generate_dashboard())
 
 
 @app.command("watch")
@@ -430,57 +631,33 @@ def watch_loop(
     debounce_ms: Annotated[int, typer.Option("--debounce-ms")] = 1200,
     min_interval_sec: Annotated[int, typer.Option("--min-interval-sec")] = 3,
 ) -> None:
-    svc = _service(project_root)
-    root = (project_root or Path.cwd()).resolve()
-    svc.init()
-
-    import datetime
-
-    from rich.align import Align
-    from rich.live import Live
-    from rich.spinner import Spinner
-
-    last_snapshot_id = svc._latest_snapshot_id() or "None"
-
-    def generate_dashboard() -> Panel:
-        table = Table.grid(padding=(0, 2))
-        table.add_column(style="cyan", justify="right")
-        table.add_column(style="white")
-        table.add_row("Root:", str(root))
-        table.add_row("Active Goal:", f"[bold green]{goal or 'None'}[/bold green]")
-        table.add_row("Last Snapshot:", f"[bold magenta]{last_snapshot_id}[/bold magenta]")
-        table.add_row("Status:", Spinner("dots", text="[yellow]Watching for file changes...[/yellow]"))
-        return Panel(
-            Align.center(table),
-            title=f"[bold]Infinite Context Watcher[/bold] • {datetime.datetime.now().strftime('%H:%M:%S')}",
-            border_style="cyan",
-        )
-
-    last_snapshot_ts = 0.0
-    with Live(generate_dashboard(), refresh_per_second=4) as live:
-        for _changes in watch(root, debounce=debounce_ms):
-            now = time.time()
-            if now - last_snapshot_ts < min_interval_sec:
-                continue
-            snap = svc.snapshot(goal=goal)
-            last_snapshot_ts = now
-            last_snapshot_id = snap.id
-            live.update(generate_dashboard())
+    session(
+        goal=goal,
+        project_root=project_root,
+        debounce_ms=debounce_ms,
+        min_interval_sec=min_interval_sec,
+        once=False,
+        json=False,
+    )
 
 
 @app.command("cleanup")
 def cleanup(
     keep: Annotated[int, typer.Option("--keep", help="Number of recent snapshots to keep")] = 10,
     project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
+    yes: Annotated[bool, typer.Option("--yes", help="Confirm deletion of old snapshots")] = False,
 ) -> None:
     """Prune old snapshots and compact the local memory database."""
     svc = _service(project_root)
     rows = svc.db.query("SELECT id FROM snapshots ORDER BY created_at DESC")
     if len(rows) <= keep:
-        console.print(f"[green]Clean:[/green] Only {len(rows)} snapshots exist. Kept all.")
+        console.print(Panel(f"Only {len(rows)} snapshots exist. Kept all.", border_style="green", expand=False))
         return
 
     to_delete = [str(r["id"]) for r in rows[keep:]]
+    if not yes:
+        _print_error(f"Cleanup would remove {len(to_delete)} snapshots. Re-run with `--yes` to confirm.")
+        raise typer.Exit(1)
     for snap_id in to_delete:
         svc.db.execute("DELETE FROM snapshots WHERE id = ?", (snap_id,))
         snap_file = svc.layout.snapshots / f"{snap_id}.json"
@@ -488,6 +665,4 @@ def cleanup(
             snap_file.unlink()
 
     svc.db.execute("VACUUM")
-    console.print(
-        f"[green]Cleanup complete.[/green] Removed [bold]{len(to_delete)}[/bold] old snapshots and compacted db."
-    )
+    console.print(Panel(f"Removed {len(to_delete)} old snapshots and compacted the database.", border_style="green"))
