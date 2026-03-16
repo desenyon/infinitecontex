@@ -9,13 +9,21 @@ from uuid import uuid4
 
 import orjson
 
-from infinitecontex.capture.chat_ingest import ingest_chat_text
+from infinitecontex.capture.chat_ingest import extract_chat_text, ingest_chat_text
 from infinitecontex.capture.git_state import recent_commits, recent_diff_summary
 from infinitecontex.capture.repo_scan import scan_behavioral, scan_structural
 from infinitecontex.capture.terminal import summarize_terminal_log
 from infinitecontex.capture.working_set import build_working_set
 from infinitecontex.core.config import AppConfig, load_app_config, save_repo_config
-from infinitecontex.core.models import DecisionRecord, PromptMode, Snapshot
+from infinitecontex.core.models import (
+    BehavioralContext,
+    DecisionRecord,
+    IntentContext,
+    PromptMode,
+    Snapshot,
+    StructuralContext,
+    WorkingSetContext,
+)
 from infinitecontex.core.redaction import redact_list, redact_text
 from infinitecontex.core.serde import dump_json
 from infinitecontex.decisions.store import DecisionStore
@@ -50,59 +58,26 @@ class InfiniteContextService:
     def status(self) -> dict[str, object]:
         latest = self._latest_snapshot_id()
         pins = self.list_pins()
+        intent_payload = self._load_intent_state()
         return {
             "project_root": str(self.project_root),
             "branch": self._branch(),
             "latest_snapshot": latest,
             "pins": pins,
             "recent_commits": recent_commits(self.project_root, limit=5),
+            "developer_goal": cast(str, intent_payload.get("developer_goal", "")),
+            "active_tasks": cast(list[str], intent_payload.get("active_tasks", [])),
+            "unresolved_issues": cast(list[str], intent_payload.get("unresolved_issues", [])),
+            "selected_source": cast(str | None, intent_payload.get("selected_source")),
         }
 
     def snapshot(self, goal: str = "") -> Snapshot:
         self._ensure_ready()
         cfg = load_app_config(self.project_root)
-        redact_patterns = cfg.policies.privacy.redact_patterns
-
-        structural, fingerprints = scan_structural(
-            self.project_root,
-            max_files=cfg.capture_max_files,
-            include_patterns=cfg.include_patterns,
-            exclude_patterns=cfg.exclude_patterns,
-        )
-        behavioral = scan_behavioral(self.project_root, [fp.path for fp in fingerprints])
-
-        terminal = summarize_terminal_log(self.layout.working_set / "terminal.log")
-        terminal_success = redact_list(terminal["successful"], redact_patterns)
-        terminal_failed = redact_list(terminal["failed"], redact_patterns)
-        terminal_traces = redact_list(terminal["stack_traces"], redact_patterns)
-        terminal_tests = redact_list(terminal["failing_tests"], redact_patterns)
-        working = build_working_set(
-            self.project_root,
-            pins=self.list_pins(),
-            last_successful_commands=terminal_success,
-            last_failed_commands=terminal_failed,
-            stack_traces=terminal_traces,
-            failing_tests=terminal_tests,
-        )
-
-        recent_decisions = [d.summary for d in self.decisions.list_recent(limit=15)]
-        intent_payload = self._load_intent_state()
-        developer_goal = goal or cast(str, intent_payload.get("developer_goal", ""))
-        intent_decisions = cast(list[str], intent_payload.get("decisions", []))
-        assumptions = cast(list[str], intent_payload.get("assumptions", []))
-        active_tasks = cast(list[str], intent_payload.get("active_tasks", []))
-        unresolved_issues = cast(list[str], intent_payload.get("unresolved_issues", []))
-
-        from infinitecontex.core.models import IntentContext
-
-        intent = IntentContext(
-            developer_goal=developer_goal,
-            decisions=recent_decisions + intent_decisions,
-            assumptions=assumptions,
-            active_tasks=active_tasks,
-            unresolved_issues=unresolved_issues,
-            inferred_change_purpose="Focused edits on active files",
-        )
+        structural, behavioral, fingerprints = self._capture_repo_context(cfg)
+        runtime = self._capture_runtime_context(cfg)
+        working = self._capture_working_context(runtime)
+        intent = self._capture_intent_context(goal=goal, working=working)
 
         snapshot = Snapshot(
             id=self._new_snapshot_id(),
@@ -112,7 +87,13 @@ class InfiniteContextService:
             intent=intent,
             working_set=working,
             fingerprints=fingerprints,
-            metrics={"file_count": len(fingerprints), "token_budget": cfg.policies.token.default_budget},
+            metrics={
+                "file_count": len(fingerprints),
+                "token_budget": cfg.policies.token.default_budget,
+                "decision_count": len(intent.decisions),
+                "active_task_count": len(intent.active_tasks),
+                "file_insight_count": len(structural.file_insights),
+            },
         )
 
         self._save_snapshot(snapshot)
@@ -173,24 +154,36 @@ class InfiniteContextService:
     def ingest_chat(self, chat_path: Path) -> dict[str, object]:
         self._ensure_ready()
         payload = ingest_chat_text(chat_path)
+        payload["selected_source"] = "file"
+        payload["selected_path"] = str(chat_path)
+        payload["source_text"] = extract_chat_text(chat_path)
+        return self.ingest_chat_payload(payload)
 
+    def ingest_chat_payload(self, payload: dict[str, Any]) -> dict[str, object]:
+        self._ensure_ready()
         cfg = load_app_config(self.project_root)
         patterns = cfg.policies.privacy.redact_patterns
-        chat_body = chat_path.read_text(encoding="utf-8", errors="ignore")
-        self.retrieval.index_document("chat", chat_path.name, redact_text(chat_body, patterns))
-        EventLogger(self.layout.events / "events.jsonl").log("ingest_chat", {"file": str(chat_path)})
+        source_text = str(payload.get("source_text", ""))
+        source_path = str(payload.get("selected_path") or payload.get("file") or "")
 
-        return self._finalize_ingest(payload)
+        if source_text:
+            source_key = Path(source_path).name if source_path else str(payload.get("selected_source", "auto-chat"))
+            self.retrieval.index_document("chat", source_key, redact_text(source_text, patterns))
+
+        EventLogger(self.layout.events / "events.jsonl").log(
+            "ingest_chat",
+            {"file": source_path or str(payload.get("selected_source", "auto"))},
+        )
+        persisted_payload = dict(payload)
+        persisted_payload.pop("source_text", None)
+        return self._finalize_ingest(persisted_payload)
 
     def _finalize_ingest(self, payload: dict[str, Any]) -> dict[str, object]:
         cfg = load_app_config(self.project_root)
         patterns = cfg.policies.privacy.redact_patterns
-        payload_redacted = {
-            key: redact_text(value, patterns) if isinstance(value, str) else redact_list(value, patterns)
-            for key, value in payload.items()
-        }
+        payload_redacted = cast(dict[str, object], self._redact_value(payload, patterns))
         dump_json(self.layout.working_set / "intent_state.json", payload_redacted)
-        return cast(dict[str, object], payload_redacted)
+        return payload_redacted
 
     def diff_summary(self) -> list[str]:
         return recent_diff_summary(self.project_root)
@@ -279,11 +272,11 @@ class InfiniteContextService:
             return None
         return str(rows[0]["id"])
 
-    def _load_intent_state(self) -> dict[str, list[str] | str]:
+    def _load_intent_state(self) -> dict[str, Any]:
         path = self.layout.working_set / "intent_state.json"
         if not path.exists():
             return {}
-        return cast(dict[str, list[str] | str], orjson.loads(path.read_bytes()))
+        return cast(dict[str, Any], orjson.loads(path.read_bytes()))
 
     def _new_snapshot_id(self) -> str:
         ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
@@ -302,6 +295,9 @@ class InfiniteContextService:
                 f"- **Developer Goal:** {snapshot.intent.developer_goal or 'None active'}",
                 f"- **Next Likely Action:** {snapshot.working_set.next_likely_action or 'None'}",
                 "",
+                "## Active Tasks",
+                *[f"- {task}" for task in snapshot.intent.active_tasks[:10]],
+                "",
                 "## Active Priority Files",
                 *[f"- `{path}`" for path in snapshot.working_set.active_files[:25]],
             ]
@@ -314,6 +310,13 @@ class InfiniteContextService:
             arch_md.append(f"- **`{d}/`**: {summary}")
         arch_md.extend(
             [
+                "",
+                "## Key File Insights",
+                *[
+                    f"- `{insight.path}`: {insight.summary}"
+                    + (f" ({', '.join(insight.symbols[:4])})" if insight.symbols else "")
+                    for insight in snapshot.structural.file_insights[:10]
+                ],
                 "",
                 "## Key Files",
                 *[f"- `{f}`" for f in snapshot.structural.key_files],
@@ -338,6 +341,11 @@ class InfiniteContextService:
         )
         if snapshot.intent.unresolved_issues:
             decisions_md.extend([f"- {i}" for i in snapshot.intent.unresolved_issues])
+        else:
+            decisions_md.append("*None*")
+        decisions_md.extend(["", "## Open Questions"])
+        if snapshot.intent.open_questions:
+            decisions_md.extend([f"- {question}" for question in snapshot.intent.open_questions])
         else:
             decisions_md.append("*None*")
         (agents_dir / "decisions.md").write_text("\n".join(decisions_md), encoding="utf-8")
@@ -393,3 +401,70 @@ class InfiniteContextService:
             return current_branch(self.project_root)
         except Exception:
             return "unknown"
+
+    def _capture_repo_context(self, cfg: AppConfig) -> tuple[StructuralContext, BehavioralContext, list[Any]]:
+        structural, fingerprints = scan_structural(
+            self.project_root,
+            max_files=cfg.capture_max_files,
+            include_patterns=cfg.include_patterns,
+            exclude_patterns=cfg.exclude_patterns,
+        )
+        behavioral = scan_behavioral(self.project_root, [fp.path for fp in fingerprints])
+        return structural, behavioral, fingerprints
+
+    def _capture_runtime_context(self, cfg: AppConfig) -> dict[str, list[str]]:
+        terminal = summarize_terminal_log(self.layout.working_set / "terminal.log")
+        redact_patterns = cfg.policies.privacy.redact_patterns
+        return {
+            "successful": redact_list(terminal["successful"], redact_patterns),
+            "failed": redact_list(terminal["failed"], redact_patterns),
+            "stack_traces": redact_list(terminal["stack_traces"], redact_patterns),
+            "failing_tests": redact_list(terminal["failing_tests"], redact_patterns),
+        }
+
+    def _capture_working_context(self, runtime: dict[str, list[str]]) -> WorkingSetContext:
+        return build_working_set(
+            self.project_root,
+            pins=self.list_pins(),
+            last_successful_commands=runtime["successful"],
+            last_failed_commands=runtime["failed"],
+            stack_traces=runtime["stack_traces"],
+            failing_tests=runtime["failing_tests"],
+        )
+
+    def _capture_intent_context(self, goal: str, working: WorkingSetContext) -> IntentContext:
+        recent_decisions = [d.summary for d in self.decisions.list_recent(limit=15)]
+        intent_payload = self._load_intent_state()
+        developer_goal = goal or cast(str, intent_payload.get("developer_goal", ""))
+        intent_decisions = cast(list[str], intent_payload.get("decisions", []))
+        assumptions = cast(list[str], intent_payload.get("assumptions", []))
+        active_tasks = cast(list[str], intent_payload.get("active_tasks", []))
+        unresolved_issues = cast(list[str], intent_payload.get("unresolved_issues", []))
+        open_questions = cast(list[str], intent_payload.get("open_questions", []))
+        signal_sources = cast(dict[str, list[str]], intent_payload.get("signal_sources", {}))
+
+        inferred_change_purpose = developer_goal or (
+            "Resolve broken runtime state"
+            if working.last_failed_commands or working.failing_tests
+            else "Refresh active work"
+        )
+
+        return IntentContext(
+            developer_goal=developer_goal,
+            decisions=recent_decisions + intent_decisions,
+            assumptions=assumptions,
+            active_tasks=active_tasks,
+            unresolved_issues=unresolved_issues,
+            open_questions=open_questions,
+            signal_sources=signal_sources,
+            inferred_change_purpose=inferred_change_purpose,
+        )
+
+    def _redact_value(self, value: Any, patterns: list[str]) -> Any:
+        if isinstance(value, str):
+            return redact_text(value, patterns)
+        if isinstance(value, list):
+            return [self._redact_value(item, patterns) for item in value]
+        if isinstance(value, dict):
+            return {key: self._redact_value(item, patterns) for key, item in value.items()}
+        return value
