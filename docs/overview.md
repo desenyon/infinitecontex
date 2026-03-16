@@ -1,23 +1,23 @@
 # Overview
 
-Infinite Context compiles project state into portable, layered context packets optimized for low-token AI handoff.
+Infinite Context is a structured workflow CLI for preserving project state across agent sessions, branch switches, and interrupted work.
 
 Core outcomes:
 
-- Capture structural, behavioral, intent, and working-set context.
-- Persist state locally in `.infctx/`.
-- Restore context fidelity across machines, IDEs, branches, and agents.
-- Generate agent-specific restore prompts under strict token budgets.
+- Capture repository structure, behavior, working-set state, runtime failures, and developer intent.
+- Keep everything local under `.infctx/`.
+- Generate compact prompts and handoff files from the same snapshot source of truth.
+- Make live context refresh understandable through `session`, not hidden watcher behavior.
 
 Primary interfaces:
 
-- CLI (`infctx`)
-- Python API (`InfiniteContextClient`)
-- Agent tool interface (`AgentToolInterface`)
+- CLI: `infctx`
+- Python API: `InfiniteContextClient`
+- Agent artifacts: `.infctx/agents/*.md`
 
 Product stance:
 
-- Local-first by default.
-- No silent external upload.
-- Structured context over raw dumps.
-- Fast, repeatable snapshots during normal coding flow.
+- Local-first by default
+- Deterministic outputs over opaque heuristics
+- Structured summaries over noisy raw dumps
+- Human-readable UX without losing scriptable `--json` output
