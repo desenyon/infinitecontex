@@ -9,7 +9,7 @@ import os
 from pathlib import Path
 from typing import Iterable
 
-from infinitecontex.core.models import BehavioralContext, FileFingerprint, StructuralContext
+from infinitecontex.core.models import BehavioralContext, FileFingerprint, FileInsight, StructuralContext
 
 KEY_FILE_NAMES = {
     "pyproject.toml",
@@ -21,6 +21,8 @@ KEY_FILE_NAMES = {
     "docker-compose.yml",
     "README.md",
 }
+
+FILE_INSIGHT_LIMIT = 20
 
 
 def _matches_pattern(rel_path: str, patterns: list[str]) -> bool:
@@ -73,6 +75,74 @@ def _fingerprint(path: Path, root: Path) -> FileFingerprint:
     )
 
 
+def _first_meaningful_line(text: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            return stripped
+    return ""
+
+
+def _trim_summary(text: str, max_len: int = 150) -> str:
+    if len(text) <= max_len:
+        return text
+    return text[:max_len].rstrip() + "..."
+
+
+def _python_file_insight(path: Path, root: Path) -> FileInsight:
+    rel_path = path.relative_to(root).as_posix()
+    src = path.read_text(encoding="utf-8", errors="ignore")
+
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return FileInsight(path=rel_path, summary="Python module with syntax errors", symbols=[])
+
+    docstring = ast.get_docstring(tree) or ""
+    summary = _first_meaningful_line(docstring)
+    symbols = [
+        node.name
+        for node in ast.iter_child_nodes(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+    ][:8]
+
+    if not summary and symbols:
+        summary = f"Defines {', '.join(symbols[:3])}"
+    if not summary:
+        summary = "Python module"
+
+    return FileInsight(path=rel_path, summary=_trim_summary(summary), symbols=symbols)
+
+
+def _text_file_insight(path: Path, root: Path) -> FileInsight:
+    rel_path = path.relative_to(root).as_posix()
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    summary = _first_meaningful_line(text) or f"Text file: {path.name}"
+    return FileInsight(path=rel_path, summary=_trim_summary(summary), symbols=[])
+
+
+def _build_file_insights(
+    root: Path,
+    files: list[str],
+    key_files: list[str],
+    entry_points: list[str],
+) -> list[FileInsight]:
+    prioritized: list[str] = []
+    for rel_path in [*key_files, *entry_points, *files]:
+        if rel_path not in prioritized:
+            prioritized.append(rel_path)
+    insights: list[FileInsight] = []
+    for rel_path in prioritized[:FILE_INSIGHT_LIMIT]:
+        path = root / rel_path
+        if not path.exists() or not path.is_file():
+            continue
+        if path.suffix == ".py":
+            insights.append(_python_file_insight(path, root))
+        elif path.suffix in {".md", ".toml", ".json", ".yaml", ".yml", ".ini"} or path.name == "README.md":
+            insights.append(_text_file_insight(path, root))
+    return insights
+
+
 def scan_structural(
     root: Path,
     max_files: int = 5_000,
@@ -99,6 +169,8 @@ def scan_structural(
             pkg = file_name.replace("/", ".").removesuffix(".py")
             modules.setdefault(pkg.rsplit(".", 1)[0], []).append(pkg)
         if file_name.endswith("__main__.py") or file_name in {"main.py", "app.py", "manage.py"}:
+            entry_points.append(file_name)
+        if file_name in {"cli.py", "manage.py"} or file_name.endswith("/cli.py"):
             entry_points.append(file_name)
 
     key_files = [f for f in files if Path(f).name in KEY_FILE_NAMES][:40]
@@ -133,10 +205,11 @@ def scan_structural(
         repo_tree_top=sorted({part.split("/")[0] for part in files})[:100],
         key_files=key_files,
         modules=modules,
-        entry_points=entry_points,
+        entry_points=sorted(set(entry_points)),
         config_files=config_files[:80],
         env_files=env_files[:20],
         directory_summaries=directory_summaries,
+        file_insights=_build_file_insights(root, files, key_files, entry_points),
     )
     return structural, fingerprints
 
