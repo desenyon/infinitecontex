@@ -1,37 +1,61 @@
 # Architecture
 
-## System Components
+## Capture Layers
 
-1. Capture Engine
-- Repository scanner (`capture/repo_scan.py`)
-- Git state collector (`capture/git_state.py`)
-- Working-set collector (`capture/working_set.py`)
-- Terminal/chat ingest (`capture/terminal.py`, `capture/chat_ingest.py`)
+`infinitecontex` 0.2.0 builds snapshots from four explicit layers:
 
-2. Distillation Engine
-- Hierarchical summarizer (`distill/summarizer.py`)
-- Budget-aware packet builder
+1. Repo context
+- `capture/repo_scan.py`
+- Scans files, key files, entry points, directory summaries, and file insights
 
-3. Storage Layer
-- `.infctx/` portable filesystem layout (`storage/layout.py`)
-- SQLite metadata/index store (`storage/db.py`)
-- JSON snapshot artifacts
+2. Working-set context
+- `capture/git_state.py`
+- `capture/working_set.py`
+- Captures branch, changed files, diffs, pins, and likely next action
 
-4. Retrieval + Graph
-- FTS5 search index (`retrieval/search.py`)
-- NetworkX context graph (`graph/store.py`)
+3. Runtime context
+- `capture/terminal.py`
+- Captures failed commands, tracebacks, and failing tests from local terminal logs
 
-5. Restore Engine
-- Snapshot divergence analysis (`restore/engine.py`)
+4. Intent context
+- `capture/chat_ingest.py`
+- `capture/chat_auto_discover.py`
+- Captures goals, decisions, tasks, issues, questions, and source provenance
 
-6. Prompt Compiler
-- Target-mode prompt output (`prompt/compiler.py`)
+## Assembly Flow
 
-7. Interfaces
-- Typer CLI (`cli.py`)
-- Python API (`api/client.py`)
-- Agent tools (`agent/interface.py`)
+`service.py` orchestrates the capture stages:
 
-## Storage Decision
+1. Load effective config
+2. Capture repo context
+3. Capture runtime context
+4. Capture working-set context
+5. Capture intent context
+6. Assemble a `Snapshot`
+7. Save snapshot, prompt, search index, graph, and handoff files
 
-SQLite was selected over DuckDB for deterministic local metadata workflows, mature transactional guarantees, simple portability, and built-in FTS5 support for retrieval. DuckDB remains a viable extension path for heavier analytical workloads.
+## Storage
+
+The storage layout remains `.infctx/`-based:
+
+- `metadata/state.db`
+- `snapshots/*.json`
+- `prompts/*.md`
+- `events/events.jsonl`
+- `graph/context_graph.json`
+- `working_set/intent_state.json`
+
+## CLI Layer
+
+`cli.py` exposes:
+
+- one-off commands like `snapshot`, `prompt`, `status`
+- a structured live workflow through `session`
+- a compatibility alias via `watch`
+
+The CLI now favors:
+
+- immediate feedback
+- filtered live updates
+- consistent Rich output
+- machine-readable `--json` where appropriate
