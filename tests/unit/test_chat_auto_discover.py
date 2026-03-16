@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from collections.abc import Generator
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -13,12 +16,12 @@ from infinitecontex.capture.chat_auto_discover import (
 
 
 @pytest.fixture
-def mock_home(tmp_path):
+def mock_home(tmp_path: Path) -> Generator[Path, None, None]:
     with patch("pathlib.Path.home", return_value=tmp_path):
         yield tmp_path
 
 
-def test_find_recent_file(tmp_path):
+def test_find_recent_file(tmp_path: Path) -> None:
     assert _find_recent_file(tmp_path / "nonexistent", "*.json") is None
 
     d = tmp_path / "testdir"
@@ -39,7 +42,7 @@ def test_find_recent_file(tmp_path):
 
 
 @patch("sys.platform", "darwin")
-def test_discover_cursor_sessions_mac(mock_home):
+def test_discover_cursor_sessions_mac(mock_home: Path) -> None:
     storage = mock_home / "Library/Application Support/Cursor/User/workspaceStorage/test"
     storage.mkdir(parents=True)
     db = storage / "state.vscdb"
@@ -50,7 +53,7 @@ def test_discover_cursor_sessions_mac(mock_home):
 
 
 @patch("sys.platform", "win32")
-def test_discover_cursor_sessions_win(mock_home):
+def test_discover_cursor_sessions_win(mock_home: Path) -> None:
     storage = mock_home / "AppData/Roaming/Cursor/User/workspaceStorage/test"
     storage.mkdir(parents=True)
     db = storage / "state.vscdb"
@@ -60,7 +63,7 @@ def test_discover_cursor_sessions_win(mock_home):
 
 
 @patch("sys.platform", "linux")
-def test_discover_cursor_sessions_linux(mock_home):
+def test_discover_cursor_sessions_linux(mock_home: Path) -> None:
     storage = mock_home / ".config/Cursor/User/workspaceStorage/test"
     storage.mkdir(parents=True)
     db = storage / "state.vscdb"
@@ -69,8 +72,8 @@ def test_discover_cursor_sessions_linux(mock_home):
     assert res == db
 
 
-def test_discover_cursor_local(monkeypatch, tmp_path):
-    def mock_cwd():
+def test_discover_cursor_local(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def mock_cwd() -> Path:
         return tmp_path
 
     monkeypatch.setattr(Path, "cwd", mock_cwd)
@@ -88,7 +91,7 @@ def test_discover_cursor_local(monkeypatch, tmp_path):
 
 
 @patch("sys.platform", "darwin")
-def test_discover_copilot_mac(mock_home):
+def test_discover_copilot_mac(mock_home: Path) -> None:
     storage = mock_home / "Library/Application Support/Code/User/globalStorage/github.copilot-chat/test"
     storage.mkdir(parents=True)
     assert discover_copilot_logs() is None
@@ -99,7 +102,7 @@ def test_discover_copilot_mac(mock_home):
 
 
 @patch("sys.platform", "win32")
-def test_discover_copilot_win(mock_home):
+def test_discover_copilot_win(mock_home: Path) -> None:
     storage = mock_home / "AppData/Roaming/Code/User/globalStorage/github.copilot-chat/test"
     storage.mkdir(parents=True)
     f = storage / "chat.json"
@@ -108,7 +111,7 @@ def test_discover_copilot_win(mock_home):
 
 
 @patch("sys.platform", "linux")
-def test_discover_copilot_linux(mock_home):
+def test_discover_copilot_linux(mock_home: Path) -> None:
     storage = mock_home / ".config/Code/User/globalStorage/github.copilot-chat/test"
     storage.mkdir(parents=True)
     f = storage / "chat.json"
@@ -116,7 +119,7 @@ def test_discover_copilot_linux(mock_home):
     assert discover_copilot_logs() == f
 
 
-def test_discover_claude():
+def test_discover_claude() -> None:
     with patch("infinitecontex.capture.chat_auto_discover.Path") as mock_path:
         m = MagicMock()
         m.exists.return_value = True
@@ -133,7 +136,7 @@ def test_discover_claude():
 @patch("infinitecontex.capture.chat_auto_discover.discover_claude_logs", return_value=None)
 @patch("infinitecontex.capture.chat_auto_discover.discover_copilot_logs", return_value=None)
 @patch("infinitecontex.capture.chat_auto_discover.discover_cursor_sessions", return_value=None)
-def test_auto_ingest_chat_none(m1, m2, m3):
+def test_auto_ingest_chat_none(m1: MagicMock, m2: MagicMock, m3: MagicMock) -> None:
     res = auto_ingest_chat()
     assert res["developer_goal"] == ""
     assert res["decisions"] == []
@@ -145,7 +148,9 @@ def test_auto_ingest_chat_none(m1, m2, m3):
 @patch("infinitecontex.capture.chat_auto_discover.discover_copilot_logs")
 @patch("infinitecontex.capture.chat_auto_discover.discover_cursor_sessions")
 @patch("infinitecontex.capture.chat_auto_discover.ingest_chat_text")
-def test_auto_ingest_chat_all_found(mock_extract, m_cursor, m_copilot, m_claude):
+def test_auto_ingest_chat_all_found(
+    mock_extract: MagicMock, m_cursor: MagicMock, m_copilot: MagicMock, m_claude: MagicMock
+) -> None:
     m_claude.return_value = MagicMock()
     m_copilot.return_value = MagicMock()
     m_cursor.return_value = MagicMock()
