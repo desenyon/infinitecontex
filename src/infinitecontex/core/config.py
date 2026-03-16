@@ -22,6 +22,7 @@ class AppConfig(BaseModel):
     exclude_patterns: list[str] = Field(
         default_factory=lambda: [
             ".git/**",
+            ".infctx/**",
             ".venv/**",
             "node_modules/**",
             ".pytest_cache/**",
