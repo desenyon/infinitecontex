@@ -133,7 +133,7 @@ Do not just stub these. Implement them.
 
 Architecture requirements:
 
-- Use Python 3.12+
+- Use Python 3.11+
 - Use a clean modular architecture with strong boundaries
 - Use typed code everywhere
 - Use Pydantic models for structured schemas
