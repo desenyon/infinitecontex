@@ -61,6 +61,22 @@ def test_scan_structural_max_files(tmp_path):
     assert len(fingerprints) == 2
 
 
+def test_scan_structural_collects_file_insights(tmp_path):
+    (tmp_path / "README.md").write_text("# Demo\nUseful project summary.\n", encoding="utf-8")
+    (tmp_path / "app.py").write_text(
+        '"""CLI entrypoint."""\n\n\ndef run_app():\n    return "ok"\n',
+        encoding="utf-8",
+    )
+
+    struct, _ = scan_structural(tmp_path, max_files=10)
+
+    assert struct.file_insights
+    assert any(item.path == "app.py" for item in struct.file_insights)
+    app_insight = next(item for item in struct.file_insights if item.path == "app.py")
+    assert "CLI entrypoint" in app_insight.summary
+    assert "run_app" in app_insight.symbols
+
+
 def test_scan_structural_include_miss(tmp_path):
     f = tmp_path / "test.txt"
     f.write_text("")
