@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pytest import MonkeyPatch
 from typer.testing import CliRunner
 
 from infinitecontex.cli import app
@@ -49,7 +50,9 @@ def test_cli_session_once_creates_initial_snapshot(tmp_repo: Path) -> None:
     assert '"goal": "ship release"' in result.stdout
 
 
-def test_cli_ingest_chat_auto_indexes_discovered_text(tmp_repo: Path, monkeypatch) -> None:
+def test_cli_ingest_chat_auto_indexes_discovered_text(
+    tmp_repo: Path, monkeypatch: MonkeyPatch
+) -> None:
     runner = CliRunner()
     init_result = runner.invoke(app, ["init", "--project-root", str(tmp_repo)])
     assert init_result.exit_code == 0
@@ -79,7 +82,9 @@ def test_cli_ingest_chat_auto_indexes_discovered_text(tmp_repo: Path, monkeypatc
     assert "overhaul search" in search_result.stdout.lower()
 
 
-def test_cli_config_resolves_set_file_from_project_root(tmp_repo: Path, monkeypatch) -> None:
+def test_cli_config_resolves_set_file_from_project_root(
+    tmp_repo: Path, monkeypatch: MonkeyPatch
+) -> None:
     runner = CliRunner()
     (tmp_repo / "config").mkdir()
     (tmp_repo / "config" / "default.json").write_text('{"capture_max_files": 42}', encoding="utf-8")
