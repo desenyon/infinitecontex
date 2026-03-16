@@ -16,7 +16,7 @@ def _run_git(project_root: Path, args: list[str]) -> str:
     )
     if result.returncode != 0:
         return ""
-    return result.stdout.strip()
+    return result.stdout.rstrip()
 
 
 def current_branch(project_root: Path) -> str:
@@ -45,5 +45,8 @@ def git_status_files(project_root: Path, limit: int = 50) -> list[str]:
     for line in out.splitlines():
         if len(line) < 4:
             continue
-        files.append(line[3:].strip())
+        path_part = line[3:].strip()
+        if " -> " in path_part:
+            path_part = path_part.split(" -> ", 1)[1].strip()
+        files.append(path_part)
     return files[:limit]
