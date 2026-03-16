@@ -1,6 +1,6 @@
 # Coding Standards
 
-- Python 3.12+ with strict typing.
+- Python 3.11+ with strict typing.
 - Pydantic models for all persisted and cross-layer schemas.
 - Typer for CLI surface.
 - No god modules; keep boundaries explicit by subsystem.
