@@ -46,8 +46,7 @@ def test_discover_cursor_sessions_mac(mock_home):
     db.write_text("")
 
     res = discover_cursor_sessions()
-    # It returns None currently because we 'pass' on the heuristic check but we return None overall
-    assert res is None
+    assert res == db
 
 
 @patch("sys.platform", "win32")
@@ -57,7 +56,7 @@ def test_discover_cursor_sessions_win(mock_home):
     db = storage / "state.vscdb"
     db.write_text("")
     res = discover_cursor_sessions()
-    assert res is None
+    assert res == db
 
 
 @patch("sys.platform", "linux")
@@ -67,7 +66,7 @@ def test_discover_cursor_sessions_linux(mock_home):
     db = storage / "state.vscdb"
     db.write_text("")
     res = discover_cursor_sessions()
-    assert res is None
+    assert res == db
 
 
 def test_discover_cursor_local(monkeypatch, tmp_path):
@@ -136,7 +135,10 @@ def test_discover_claude():
 @patch("infinitecontex.capture.chat_auto_discover.discover_cursor_sessions", return_value=None)
 def test_auto_ingest_chat_none(m1, m2, m3):
     res = auto_ingest_chat()
-    assert res == {"decisions": [], "assumptions": [], "active_tasks": [], "unresolved_issues": []}
+    assert res["developer_goal"] == ""
+    assert res["decisions"] == []
+    assert res["selected_source"] is None
+    assert len(res["checked_sources"]) == 3
 
 
 @patch("infinitecontex.capture.chat_auto_discover.discover_claude_logs")
@@ -147,8 +149,11 @@ def test_auto_ingest_chat_all_found(mock_extract, m_cursor, m_copilot, m_claude)
     m_claude.return_value = MagicMock()
     m_copilot.return_value = MagicMock()
     m_cursor.return_value = MagicMock()
-    mock_extract.return_value = {"success": True}
+    mock_extract.return_value = {"developer_goal": "ship it", "decisions": []}
 
     res = auto_ingest_chat()
-    assert res == {"success": True}
+    assert res["developer_goal"] == "ship it"
+    assert res["selected_source"] == "claude"
+    assert res["selected_path"] is not None
+    assert len(res["checked_sources"]) == 3
     mock_extract.assert_called_once_with(m_claude.return_value)
