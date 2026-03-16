@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -5,7 +8,7 @@ import pytest
 from infinitecontex.service import InfiniteContextService
 
 
-def test_service_restore_no_snapshots(tmp_path):
+def test_service_restore_no_snapshots(tmp_path: Path) -> None:
     svc = InfiniteContextService(tmp_path)
     svc.init()
     # Delete snapshots to simulate no snapshots
@@ -14,7 +17,7 @@ def test_service_restore_no_snapshots(tmp_path):
         svc.restore()
 
 
-def test_service_prompt_no_snapshots(tmp_path):
+def test_service_prompt_no_snapshots(tmp_path: Path) -> None:
     svc = InfiniteContextService(tmp_path)
     svc.init()
     svc.db.execute("DELETE FROM snapshots")
@@ -24,27 +27,27 @@ def test_service_prompt_no_snapshots(tmp_path):
         svc.prompt(PromptMode.GENERIC_AGENT_RESTORE, 1000)
 
 
-def test_service_list_pins_no_db(tmp_path):
+def test_service_list_pins_no_db(tmp_path: Path) -> None:
     svc = InfiniteContextService(tmp_path)
     # Don't init, so no DB exists
     assert svc.list_pins() == []
 
 
-def test_service_load_snapshot_fallback(tmp_path):
+def test_service_load_snapshot_fallback(tmp_path: Path) -> None:
     svc = InfiniteContextService(tmp_path)
     svc.init()
     with pytest.raises(ValueError, match="snapshot not found: unknown"):
         svc._load_snapshot("unknown")
 
 
-def test_service_latest_snapshot_id_no_db(tmp_path):
+def test_service_latest_snapshot_id_no_db(tmp_path: Path) -> None:
     svc = InfiniteContextService(tmp_path)
     assert svc._latest_snapshot_id() is None
     with pytest.raises(ValueError, match="no snapshots found"):
         svc._latest_snapshot_id(required=True)
 
 
-def test_service_latest_snapshot_id_empty_db(tmp_path):
+def test_service_latest_snapshot_id_empty_db(tmp_path: Path) -> None:
     svc = InfiniteContextService(tmp_path)
     svc.init()
     assert svc._latest_snapshot_id() is None
@@ -52,20 +55,20 @@ def test_service_latest_snapshot_id_empty_db(tmp_path):
         svc._latest_snapshot_id(required=True)
 
 
-def test_service_load_intent_state_empty(tmp_path):
+def test_service_load_intent_state_empty(tmp_path: Path) -> None:
     svc = InfiniteContextService(tmp_path)
     svc.init()
     # File doesn't exist
     assert svc._load_intent_state() == {}
 
 
-def test_service_branch_exception(tmp_path):
+def test_service_branch_exception(tmp_path: Path) -> None:
     svc = InfiniteContextService(tmp_path)
     with patch("infinitecontex.capture.git_state.current_branch", side_effect=Exception("git failed")):
         assert svc._branch() == "unknown"
 
 
-def test_service_write_handoff_empty_fields(tmp_path):
+def test_service_write_handoff_empty_fields(tmp_path: Path) -> None:
     svc = InfiniteContextService(tmp_path)
     svc.init()
 
@@ -137,7 +140,7 @@ def test_service_write_handoff_empty_fields(tmp_path):
     assert "*Workspace is clean.*" in changes_text
 
 
-def test_service_status_includes_intent_summary(tmp_path):
+def test_service_status_includes_intent_summary(tmp_path: Path) -> None:
     svc = InfiniteContextService(tmp_path)
     svc.init()
     svc._finalize_ingest(
@@ -159,7 +162,7 @@ def test_service_status_includes_intent_summary(tmp_path):
     assert status["unresolved_issues"] == ["Watch mode is confusing"]
 
 
-def test_service_snapshot_preserves_full_changed_file_name(tmp_path):
+def test_service_snapshot_preserves_full_changed_file_name(tmp_path: Path) -> None:
     svc = InfiniteContextService(tmp_path)
     svc.init()
 
