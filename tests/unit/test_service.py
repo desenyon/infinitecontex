@@ -135,3 +135,48 @@ def test_service_write_handoff_empty_fields(tmp_path):
 
     changes_text = (svc.layout.agents / "recent_changes.md").read_text()
     assert "*Workspace is clean.*" in changes_text
+
+
+def test_service_status_includes_intent_summary(tmp_path):
+    svc = InfiniteContextService(tmp_path)
+    svc.init()
+    svc._finalize_ingest(
+        {
+            "developer_goal": "overhaul the cli",
+            "decisions": ["Use structured sessions"],
+            "assumptions": [],
+            "active_tasks": ["Update docs"],
+            "unresolved_issues": ["Watch mode is confusing"],
+            "open_questions": [],
+            "signal_sources": {"developer_goal": ["manual"]},
+        }
+    )
+
+    status = svc.status()
+
+    assert status["developer_goal"] == "overhaul the cli"
+    assert status["active_tasks"] == ["Update docs"]
+    assert status["unresolved_issues"] == ["Watch mode is confusing"]
+
+
+def test_service_snapshot_preserves_full_changed_file_name(tmp_path):
+    svc = InfiniteContextService(tmp_path)
+    svc.init()
+
+    tracked = tmp_path / "CHANGELOG.md"
+    tracked.write_text("initial\n", encoding="utf-8")
+
+    import subprocess
+
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    subprocess.run(["git", "config", "user.email", "dev@example.com"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "config", "user.name", "Dev"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "CHANGELOG.md"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, check=True, capture_output=True)
+
+    tracked.write_text("changed\n", encoding="utf-8")
+
+    snap = svc.snapshot(goal="test changed paths")
+
+    assert "CHANGELOG.md" in snap.working_set.active_files
+    assert "CHANGELOG.md" in (svc.layout.agents / "overview.md").read_text(encoding="utf-8")
