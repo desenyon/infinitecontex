@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Any
 
-from infinitecontex.capture.chat_ingest import ingest_chat_text
+from infinitecontex.capture.chat_ingest import extract_chat_text, ingest_chat_text
 
 
 def _find_recent_file(directory: Path, pattern: str) -> Path | None:
@@ -41,14 +41,9 @@ def discover_cursor_sessions() -> Path | None:
         storage = home / ".config/Cursor/User/workspaceStorage"
 
     if storage.exists():
-        # Find the most recently modified state.vscdb
         recent_db = _find_recent_file(storage, "state.vscdb")
         if recent_db:
-            # We can't trivially parse it safely here without raw text extraction,
-            # so we might dump strings from it if we wanted to be extreme.
-            # But let's dump a fake path indicator so the ingestion can at least try.
-            # Realistically, Cursor chat is hard to parse live from binary dict form.
-            pass
+            return recent_db
 
     return None
 
@@ -66,9 +61,13 @@ def discover_copilot_logs() -> Path | None:
         storage = home / ".config/Code/User/globalStorage/github.copilot-chat"
 
     if storage.exists():
-        recent = _find_recent_file(storage, "*.json")
-        if recent:
-            return recent
+        candidates: list[Path] = []
+        for pattern in ("*chat*.json", "*conversation*.json", "*session*.json", "*.jsonl", "*.txt"):
+            recent = _find_recent_file(storage, pattern)
+            if recent is not None:
+                candidates.append(recent)
+        if candidates:
+            return max(candidates, key=lambda path: path.stat().st_mtime)
     return None
 
 
@@ -82,25 +81,60 @@ def discover_claude_logs() -> Path | None:
 
 def auto_ingest_chat() -> dict[str, Any]:
     """Discover recent AI chat logs and extract context from them."""
-    found_paths: list[Path] = []
+    checked_sources: list[dict[str, str | None]] = []
+    candidates: list[tuple[str, Path]] = []
 
-    # Try Claude
-    claude = discover_claude_logs()
-    if claude:
-        found_paths.append(claude)
+    for source_name, discover in (
+        ("claude", discover_claude_logs),
+        ("copilot", discover_copilot_logs),
+        ("cursor", discover_cursor_sessions),
+    ):
+        path = discover()
+        status = "missing"
+        if path is not None:
+            status = "unsupported" if path.suffix == ".vscdb" else "found"
+        checked_sources.append(
+            {
+                "source": source_name,
+                "status": status,
+                "path": str(path) if path else None,
+            }
+        )
+        if path is not None and path.suffix != ".vscdb":
+            candidates.append((source_name, path))
 
-    # Try Copilot
-    copilot = discover_copilot_logs()
-    if copilot:
-        found_paths.append(copilot)
+    if not candidates:
+        return {
+            "developer_goal": "",
+            "decisions": [],
+            "assumptions": [],
+            "active_tasks": [],
+            "unresolved_issues": [],
+            "open_questions": [],
+            "signal_sources": {},
+            "selected_source": None,
+            "selected_path": None,
+            "checked_sources": checked_sources,
+        }
 
-    # Try Cursor
-    cursor = discover_cursor_sessions()
-    if cursor:
-        found_paths.append(cursor)
+    for source_name, target in candidates:
+        payload = ingest_chat_text(target)
+        if payload["developer_goal"] or payload["decisions"] or payload["active_tasks"] or payload["open_questions"]:
+            payload["selected_source"] = source_name
+            payload["selected_path"] = str(target)
+            payload["checked_sources"] = checked_sources
+            payload["source_text"] = extract_chat_text(target)
+            return payload
 
-    if not found_paths:
-        return {"decisions": [], "assumptions": [], "active_tasks": [], "unresolved_issues": []}
-
-    target = found_paths[0]  # Just use the most highly relevant/recent one found
-    return ingest_chat_text(target)
+    return {
+        "developer_goal": "",
+        "decisions": [],
+        "assumptions": [],
+        "active_tasks": [],
+        "unresolved_issues": [],
+        "open_questions": [],
+        "signal_sources": {},
+        "selected_source": None,
+        "selected_path": None,
+        "checked_sources": checked_sources,
+    }
