@@ -75,6 +75,8 @@ def _matches_pattern(rel_path: str, patterns: list[str]) -> bool:
             prefix = pattern[: -len("/**")].rstrip("/")
             if rel_path == prefix or rel_path.startswith(prefix + "/"):
                 return True
+        if pattern.startswith("**/") and fnmatch.fnmatch(rel_path, pattern[3:]):
+            return True
         if fnmatch.fnmatch(rel_path, pattern):
             return True
     return False
@@ -137,6 +139,8 @@ def _emit(payload: object, as_json: bool, format_type: str = "generic") -> None:
             from rich.columns import Columns
 
             latest = payload.get("latest_snapshot") or "None"
+            latest_created_at = payload.get("latest_snapshot_created_at") or "None"
+            snapshot_count = payload.get("snapshot_count", 0)
             branch = payload.get("branch", "unknown")
             root_dir = payload.get("project_root", "")
             pins = payload.get("pins", [])
@@ -151,6 +155,8 @@ def _emit(payload: object, as_json: bool, format_type: str = "generic") -> None:
             dash_table.add_row("Root:", str(root_dir))
             dash_table.add_row("Branch:", f"[green]{branch}[/green]")
             dash_table.add_row("Memory:", f"[magenta]{latest}[/magenta]")
+            dash_table.add_row("Captured:", str(latest_created_at))
+            dash_table.add_row("Snapshots:", str(snapshot_count))
             dash_table.add_row("Goal:", str(developer_goal))
 
             pin_text = "\n".join(f"• {p}" for p in pins) if pins else "[dim]No active pins.[/dim]"
@@ -224,6 +230,112 @@ def _emit(payload: object, as_json: bool, format_type: str = "generic") -> None:
             console.print(_format_dict(payload, "Session Capture"))
         elif format_type == "restore":
             console.print(_format_dict(payload, "Restore Report"))
+        elif format_type == "snapshot_detail":
+            from rich.columns import Columns
+
+            overview = Table.grid(padding=1)
+            overview.add_column(style="bold cyan", justify="right")
+            overview.add_column(style="white")
+            overview.add_row("Snapshot:", str(payload.get("id", "")))
+            overview.add_row("Created:", str(payload.get("created_at", "")))
+            overview.add_row("Branch:", str(payload.get("working_set", {}).get("branch", "")))
+            overview.add_row("Goal:", str(payload.get("intent", {}).get("developer_goal", "") or "None"))
+            overview.add_row("Prompt:", str(payload.get("prompt_path", "")))
+
+            metrics = payload.get("metrics", {})
+            metrics_text = "\n".join(f"• {key}: {value}" for key, value in metrics.items()) or "[dim]No metrics[/dim]"
+            tasks = payload.get("intent", {}).get("active_tasks", [])
+            issues = payload.get("intent", {}).get("unresolved_issues", [])
+            active_files = payload.get("working_set", {}).get("active_files", [])
+
+            cols = Columns(
+                [
+                    Panel(overview, title="[bold]Overview[/bold]", border_style="blue", padding=(1, 2)),
+                    Panel(metrics_text, title="[bold green]Metrics[/bold green]", border_style="green", padding=(1, 2)),
+                    Panel(
+                        "\n".join(f"• {item}" for item in tasks) or "[dim]No active tasks.[/dim]",
+                        title="[bold yellow]Tasks[/bold yellow]",
+                        border_style="yellow",
+                        padding=(1, 2),
+                    ),
+                    Panel(
+                        "\n".join(f"• {item}" for item in issues) or "[dim]No unresolved issues.[/dim]",
+                        title="[bold red]Issues[/bold red]",
+                        border_style="red",
+                        padding=(1, 2),
+                    ),
+                    Panel(
+                        "\n".join(f"• {item}" for item in active_files) or "[dim]No active files.[/dim]",
+                        title="[bold magenta]Active Files[/bold magenta]",
+                        border_style="magenta",
+                        padding=(1, 2),
+                    ),
+                ],
+                expand=True,
+                equal=True,
+            )
+            console.print(Panel(cols, title="[bold]Snapshot Details[/bold]", border_style="cyan", padding=1))
+        elif format_type == "snapshot_compare":
+            from rich.columns import Columns
+
+            header = Table.grid(padding=1)
+            header.add_column(style="bold cyan", justify="right")
+            header.add_column(style="white")
+            header.add_row("From:", str(payload.get("from_snapshot_id", "")))
+            header.add_row("To:", str(payload.get("to_snapshot_id", "")))
+            goals_text = f"{payload.get('from_goal', '') or 'None'} -> {payload.get('to_goal', '') or 'None'}"
+            header.add_row("Goals:", goals_text)
+            header.add_row(
+                "Branches:",
+                f"{payload.get('from_branch', '') or 'unknown'} -> {payload.get('to_branch', '') or 'unknown'}",
+            )
+            header.add_row("Summary:", str(payload.get("summary", "")))
+
+            metric_deltas = payload.get("metric_deltas", {})
+            metrics_text = "\n".join(f"• {key}: {value:+g}" for key, value in metric_deltas.items())
+            if not metrics_text:
+                metrics_text = "[dim]No metric deltas.[/dim]"
+
+            def _bullet_block(key: str, empty_text: str) -> str:
+                values = payload.get(key, [])
+                return "\n".join(f"• {item}" for item in values) if values else f"[dim]{empty_text}[/dim]"
+
+            cols = Columns(
+                [
+                    Panel(header, title="[bold]Overview[/bold]", border_style="blue", padding=(1, 2)),
+                    Panel(
+                        metrics_text,
+                        title="[bold green]Metric Deltas[/bold green]",
+                        border_style="green",
+                        padding=(1, 2),
+                    ),
+                    Panel(
+                        _bullet_block("changed_tracked_files", "No tracked file changes."),
+                        title="[bold magenta]Changed Files[/bold magenta]",
+                        border_style="magenta",
+                        padding=(1, 2),
+                    ),
+                    Panel(
+                        _bullet_block("added_tasks", "No new tasks.")
+                        + "\n\n"
+                        + _bullet_block("removed_tasks", "No removed tasks."),
+                        title="[bold yellow]Task Changes[/bold yellow]",
+                        border_style="yellow",
+                        padding=(1, 2),
+                    ),
+                    Panel(
+                        _bullet_block("added_issues", "No new issues.")
+                        + "\n\n"
+                        + _bullet_block("removed_issues", "No removed issues."),
+                        title="[bold red]Issue Changes[/bold red]",
+                        border_style="red",
+                        padding=(1, 2),
+                    ),
+                ],
+                expand=True,
+                equal=True,
+            )
+            console.print(Panel(cols, title="[bold]Snapshot Comparison[/bold]", border_style="cyan", padding=1))
         elif format_type == "diff_summary":
             diffs = payload.get("diff_summary", [])
             if not diffs:
@@ -257,6 +369,42 @@ def _emit(payload: object, as_json: bool, format_type: str = "generic") -> None:
                     )
                     table.add_row(item.get("id", ""), item.get("summary", ""), created_str)
                 console.print(Panel(table, title="[bold]Recent Decisions[/bold]", expand=False, border_style="blue"))
+        elif format_type == "snapshots":
+            if not payload:
+                console.print("[dim]No snapshots found.[/dim]")
+            else:
+                table = Table(show_header=True, header_style="bold cyan")
+                table.add_column("ID", style="magenta")
+                table.add_column("Created")
+                table.add_column("Goal")
+                table.add_column("Branch")
+                table.add_column("Files", justify="right")
+                table.add_column("Tasks", justify="right")
+                for item in payload:
+                    table.add_row(
+                        item.get("id", ""),
+                        item.get("created_at", "")[:19],
+                        item.get("developer_goal", "") or "None",
+                        item.get("branch", ""),
+                        str(item.get("file_count", 0)),
+                        str(item.get("active_task_count", 0)),
+                    )
+                console.print(Panel(table, title="[bold]Snapshot History[/bold]", expand=False, border_style="cyan"))
+        elif format_type == "pins":
+            if not payload:
+                console.print("[dim]No pins found.[/dim]")
+            else:
+                table = Table(show_header=True, header_style="bold yellow")
+                table.add_column("Path", style="cyan")
+                table.add_column("Note")
+                table.add_column("Created")
+                for item in payload:
+                    table.add_row(
+                        item.get("path", ""),
+                        item.get("note", ""),
+                        item.get("created_at", "")[:19],
+                    )
+                console.print(Panel(table, title="[bold]Pinned Context[/bold]", expand=False, border_style="yellow"))
         elif format_type == "search":
             if not payload:
                 console.print("[dim]No results found.[/dim]")
@@ -298,6 +446,49 @@ def snapshot(
         as_json=json,
         format_type="snapshot",
         progress_message="Capturing project context...",
+    )
+
+
+@app.command("snapshots")
+def snapshots_cmd(
+    limit: Annotated[int, typer.Option("--limit")] = 20,
+    project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
+    json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    _run_action(
+        lambda: [item.model_dump(mode="json") for item in _service(project_root).snapshots_recent(limit)],
+        as_json=json,
+        format_type="snapshots",
+    )
+
+
+@app.command("show-snapshot")
+def show_snapshot(
+    snapshot_id: Annotated[str | None, typer.Option("--snapshot-id")] = None,
+    project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
+    json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    _run_action(
+        lambda: _service(project_root).snapshot_details(snapshot_id=snapshot_id),
+        as_json=json,
+        format_type="snapshot_detail",
+    )
+
+
+@app.command("compare-snapshots")
+def compare_snapshots(
+    from_snapshot: Annotated[str | None, typer.Option("--from-snapshot")] = None,
+    to_snapshot: Annotated[str | None, typer.Option("--to-snapshot")] = None,
+    project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
+    json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    _run_action(
+        lambda: _service(project_root).compare_snapshots(
+            from_snapshot_id=from_snapshot,
+            to_snapshot_id=to_snapshot,
+        ).model_dump(mode="json"),
+        as_json=json,
+        format_type="snapshot_compare",
     )
 
 
@@ -378,6 +569,31 @@ def pin(
 ) -> None:
     _run_action(lambda: _service(project_root).pin(path, note))
     console.print(Panel(f"Pinned `{path}`", border_style="green", expand=False))
+
+
+@app.command()
+def pins(
+    project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
+    json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    _run_action(
+        lambda: [item.model_dump(mode="json") for item in _service(project_root).pin_records()],
+        as_json=json,
+        format_type="pins",
+    )
+
+
+@app.command()
+def unpin(
+    path: Annotated[str, typer.Option("--path")],
+    project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
+) -> None:
+    removed = _run_action(lambda: _service(project_root).unpin(path), emit=False)
+    if removed:
+        console.print(Panel(f"Removed pin `{path}`", border_style="green", expand=False))
+        return
+    _print_error(f"No pin exists for `{path}`.")
+    raise typer.Exit(1)
 
 
 @app.command("ingest-chat")
