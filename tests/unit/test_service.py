@@ -160,6 +160,67 @@ def test_service_status_includes_intent_summary(tmp_path: Path) -> None:
     assert status["developer_goal"] == "overhaul the cli"
     assert status["active_tasks"] == ["Update docs"]
     assert status["unresolved_issues"] == ["Watch mode is confusing"]
+    assert status["snapshot_count"] == 0
+
+
+def test_service_status_falls_back_to_latest_snapshot_intent(tmp_repo: Path) -> None:
+    svc = InfiniteContextService(tmp_repo)
+    svc.init()
+    svc.snapshot(goal="ship release")
+
+    status = svc.status()
+
+    assert status["developer_goal"] == "ship release"
+    assert status["snapshot_count"] == 1
+    assert status["latest_snapshot_created_at"] is not None
+
+
+def test_service_snapshot_history_and_compare(tmp_repo: Path) -> None:
+    svc = InfiniteContextService(tmp_repo)
+    svc.init()
+    first = svc.snapshot(goal="baseline")
+
+    svc._finalize_ingest(
+        {
+            "developer_goal": "baseline",
+            "decisions": [],
+            "assumptions": [],
+            "active_tasks": ["Refine output"],
+            "unresolved_issues": ["Search is noisy"],
+            "open_questions": [],
+            "signal_sources": {"developer_goal": ["manual"]},
+        }
+    )
+    target = tmp_repo / "app.py"
+    target.write_text("def run():\n    return 2\n", encoding="utf-8")
+    second = svc.snapshot(goal="upgrade snapshot tooling")
+
+    history = svc.snapshots_recent(limit=5)
+    comparison = svc.compare_snapshots(from_snapshot_id=first.id, to_snapshot_id=second.id)
+    details = svc.snapshot_details(second.id)
+
+    assert history[0].id == second.id
+    assert history[0].developer_goal == "upgrade snapshot tooling"
+    assert "app.py" in comparison.changed_tracked_files
+    assert comparison.added_tasks == ["Refine output"]
+    assert comparison.added_issues == ["Search is noisy"]
+    assert details["id"] == second.id
+    assert str(details["prompt_path"]).endswith(f"{second.id}.prompt.md")
+
+
+def test_service_pin_records_and_unpin(tmp_repo: Path) -> None:
+    svc = InfiniteContextService(tmp_repo)
+    svc.init()
+    svc.pin("app.py", "entrypoint")
+
+    pins = svc.pin_records()
+    assert len(pins) == 1
+    assert pins[0].path == "app.py"
+    assert pins[0].note == "entrypoint"
+
+    assert svc.unpin("app.py") is True
+    assert svc.unpin("app.py") is False
+    assert svc.pin_records() == []
 
 
 def test_service_snapshot_preserves_full_changed_file_name(tmp_path: Path) -> None:
