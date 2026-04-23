@@ -18,7 +18,9 @@ def import_state(project_root: Path, archive_path: Path) -> None:
     with tarfile.open(archive_path, "r:gz") as tar:
         base = project_root.resolve()
         for member in tar.getmembers():
+            if member.issym() or member.islnk():
+                raise ValueError(f"archive contains unsupported link entry: {member.name}")
             member_path = (project_root / member.name).resolve()
-            if not str(member_path).startswith(str(base)):
+            if not member_path.is_relative_to(base):
                 raise ValueError(f"archive contains unsafe path: {member.name}")
         tar.extractall(project_root, filter="data")
