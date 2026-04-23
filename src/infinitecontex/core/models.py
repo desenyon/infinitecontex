@@ -100,6 +100,45 @@ class DecisionRecord(BaseModel):
     tags: list[str] = Field(default_factory=list)
 
 
+class PinRecord(BaseModel):
+    path: str
+    note: str = ""
+    created_at: datetime
+
+
+class SnapshotSummary(BaseModel):
+    id: str
+    created_at: datetime
+    branch: str = ""
+    developer_goal: str = ""
+    active_task_count: int = 0
+    active_file_count: int = 0
+    file_count: int = 0
+    prompt_path: str = ""
+
+
+class SnapshotComparison(BaseModel):
+    from_snapshot_id: str
+    to_snapshot_id: str
+    from_created_at: datetime
+    to_created_at: datetime
+    from_goal: str = ""
+    to_goal: str = ""
+    from_branch: str = ""
+    to_branch: str = ""
+    added_tracked_files: list[str] = Field(default_factory=list)
+    removed_tracked_files: list[str] = Field(default_factory=list)
+    changed_tracked_files: list[str] = Field(default_factory=list)
+    added_active_files: list[str] = Field(default_factory=list)
+    removed_active_files: list[str] = Field(default_factory=list)
+    added_tasks: list[str] = Field(default_factory=list)
+    removed_tasks: list[str] = Field(default_factory=list)
+    added_issues: list[str] = Field(default_factory=list)
+    removed_issues: list[str] = Field(default_factory=list)
+    metric_deltas: dict[str, float] = Field(default_factory=dict)
+    summary: str
+
+
 class ContextPacket(BaseModel):
     project_card: str
     subsystem_packets: dict[str, str] = Field(default_factory=dict)
