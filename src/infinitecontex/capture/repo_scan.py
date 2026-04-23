@@ -31,6 +31,8 @@ def _matches_pattern(rel_path: str, patterns: list[str]) -> bool:
             prefix = pattern[: -len("/**")].rstrip("/")
             if rel_path == prefix or rel_path.startswith(prefix + "/"):
                 return True
+        if pattern.startswith("**/") and fnmatch.fnmatch(rel_path, pattern[3:]):
+            return True
         if fnmatch.fnmatch(rel_path, pattern):
             return True
     return False
