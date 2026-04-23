@@ -18,10 +18,15 @@ def test_client_surface_end_to_end(tmp_repo: Path, tmp_path: Path) -> None:
     client.note("Use sqlite", "Portable", ["duckdb"], "low risk", ["storage"])
     client.pin("app.py", "entry surface")
     client.ingest_chat(chat)
+    history = client.snapshots(limit=5)
 
     assert client.diff_summary() is not None
     assert client.decisions(limit=10) is not None
     assert isinstance(client.search("sqlite", limit=5), list)
+    assert history[0].id == snap.id
+
+    shown = client.show_snapshot(snap.id)
+    assert shown["id"] == snap.id
 
     prompt = client.prompt(PromptMode.GENERIC_AGENT_RESTORE, token_budget=900, snapshot_id=snap.id)
     assert "Project Card" in prompt
@@ -42,4 +47,6 @@ def test_client_surface_end_to_end(tmp_repo: Path, tmp_path: Path) -> None:
     client.set_config(cfg)
     loaded = client.get_config()
     assert loaded["project_name"] == "demo"
+    assert client.pins()[0].path == "app.py"
+    assert client.unpin("app.py") is True
     assert client.doctor()["sqlite"] == "ok"
