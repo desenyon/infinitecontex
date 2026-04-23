@@ -19,8 +19,11 @@ from infinitecontex.core.models import (
     BehavioralContext,
     DecisionRecord,
     IntentContext,
+    PinRecord,
     PromptMode,
     Snapshot,
+    SnapshotComparison,
+    SnapshotSummary,
     StructuralContext,
     WorkingSetContext,
 )
@@ -58,11 +61,16 @@ class InfiniteContextService:
     def status(self) -> dict[str, object]:
         latest = self._latest_snapshot_id()
         pins = self.list_pins()
-        intent_payload = self._load_intent_state()
+        intent_payload = self._status_intent_payload(latest)
+        latest_snapshot = self._load_snapshot(latest) if latest is not None else None
         return {
             "project_root": str(self.project_root),
             "branch": self._branch(),
             "latest_snapshot": latest,
+            "latest_snapshot_created_at": (
+                latest_snapshot.created_at.isoformat() if latest_snapshot is not None else None
+            ),
+            "snapshot_count": len(self._snapshot_ids_desc()),
             "pins": pins,
             "recent_commits": recent_commits(self.project_root, limit=5),
             "developer_goal": cast(str, intent_payload.get("developer_goal", "")),
@@ -151,6 +159,28 @@ class InfiniteContextService:
         rows = self.db.query("SELECT path FROM pins ORDER BY created_at DESC")
         return [str(row["path"]) for row in rows]
 
+    def pin_records(self) -> list[PinRecord]:
+        if not (self.layout.metadata / "state.db").exists():
+            return []
+        rows = self.db.query("SELECT path, note, created_at FROM pins ORDER BY created_at DESC")
+        return [
+            PinRecord(
+                path=str(row["path"]),
+                note=str(row["note"]),
+                created_at=datetime.fromisoformat(str(row["created_at"])),
+            )
+            for row in rows
+        ]
+
+    def unpin(self, path: str) -> bool:
+        self._ensure_ready()
+        existing = self.db.query("SELECT 1 FROM pins WHERE path = ? LIMIT 1", (path,))
+        if not existing:
+            return False
+        self.db.execute("DELETE FROM pins WHERE path = ?", (path,))
+        EventLogger(self.layout.events / "events.jsonl").log("unpin", {"path": path})
+        return True
+
     def ingest_chat(self, chat_path: Path) -> dict[str, object]:
         self._ensure_ready()
         payload = ingest_chat_text(chat_path)
@@ -187,6 +217,88 @@ class InfiniteContextService:
 
     def diff_summary(self) -> list[str]:
         return recent_diff_summary(self.project_root)
+
+    def snapshots_recent(self, limit: int = 20) -> list[SnapshotSummary]:
+        snapshot_ids = self._snapshot_ids_desc(limit=limit)
+        return [self._snapshot_summary(self._load_snapshot(snapshot_id)) for snapshot_id in snapshot_ids]
+
+    def snapshot_details(self, snapshot_id: str | None = None) -> dict[str, object]:
+        resolved_id = snapshot_id if snapshot_id is not None else self._latest_snapshot_id(required=True)
+        if resolved_id is None:
+            raise ValueError("no snapshots found")
+        snapshot = self._load_snapshot(resolved_id)
+        payload = snapshot.model_dump(mode="json")
+        payload["prompt_path"] = str(self.layout.prompts / f"{snapshot.id}.prompt.md")
+        payload["agent_dir"] = str(self.layout.agents)
+        return payload
+
+    def compare_snapshots(
+        self, from_snapshot_id: str | None = None, to_snapshot_id: str | None = None
+    ) -> SnapshotComparison:
+        snapshot_ids = self._snapshot_ids_desc()
+        if not snapshot_ids:
+            raise ValueError("no snapshots found")
+
+        resolved_to = to_snapshot_id or snapshot_ids[0]
+        if from_snapshot_id is None:
+            if resolved_to not in snapshot_ids:
+                raise ValueError(f"snapshot not found: {resolved_to}")
+            resolved_to_index = snapshot_ids.index(resolved_to)
+            if resolved_to_index + 1 >= len(snapshot_ids):
+                raise ValueError("at least two snapshots are required to compare")
+            resolved_from = snapshot_ids[resolved_to_index + 1]
+        else:
+            resolved_from = from_snapshot_id
+
+        before = self._load_snapshot(resolved_from)
+        after = self._load_snapshot(resolved_to)
+
+        before_files = {fp.path: fp.sha1 for fp in before.fingerprints}
+        after_files = {fp.path: fp.sha1 for fp in after.fingerprints}
+        shared_files = set(before_files) & set(after_files)
+
+        before_active_files = set(before.working_set.active_files)
+        after_active_files = set(after.working_set.active_files)
+        before_tasks = set(before.intent.active_tasks)
+        after_tasks = set(after.intent.active_tasks)
+        before_issues = set(before.intent.unresolved_issues)
+        after_issues = set(after.intent.unresolved_issues)
+
+        metric_deltas: dict[str, float] = {}
+        for key in sorted(set(before.metrics) | set(after.metrics)):
+            before_value = before.metrics.get(key)
+            after_value = after.metrics.get(key)
+            if isinstance(before_value, (int, float)) and isinstance(after_value, (int, float)):
+                metric_deltas[key] = round(float(after_value) - float(before_value), 2)
+
+        comparison = SnapshotComparison(
+            from_snapshot_id=before.id,
+            to_snapshot_id=after.id,
+            from_created_at=before.created_at,
+            to_created_at=after.created_at,
+            from_goal=before.intent.developer_goal,
+            to_goal=after.intent.developer_goal,
+            from_branch=before.working_set.branch,
+            to_branch=after.working_set.branch,
+            added_tracked_files=sorted(set(after_files) - set(before_files)),
+            removed_tracked_files=sorted(set(before_files) - set(after_files)),
+            changed_tracked_files=sorted(path for path in shared_files if before_files[path] != after_files[path]),
+            added_active_files=sorted(after_active_files - before_active_files),
+            removed_active_files=sorted(before_active_files - after_active_files),
+            added_tasks=sorted(after_tasks - before_tasks),
+            removed_tasks=sorted(before_tasks - after_tasks),
+            added_issues=sorted(after_issues - before_issues),
+            removed_issues=sorted(before_issues - after_issues),
+            metric_deltas=metric_deltas,
+            summary=(
+                f"tracked:+{len(set(after_files) - set(before_files))}"
+                f"/-{len(set(before_files) - set(after_files))}"
+                f"/~{len([path for path in shared_files if before_files[path] != after_files[path]])} "
+                f"tasks:+{len(after_tasks - before_tasks)}/-{len(before_tasks - after_tasks)} "
+                f"issues:+{len(after_issues - before_issues)}/-{len(before_issues - after_issues)}"
+            ),
+        )
+        return comparison
 
     def decisions_recent(self, limit: int = 20) -> list[dict[str, object]]:
         return [d.model_dump(mode="json") for d in self.decisions.list_recent(limit=limit)]
@@ -272,15 +384,50 @@ class InfiniteContextService:
             return None
         return str(rows[0]["id"])
 
+    def _snapshot_ids_desc(self, limit: int | None = None) -> list[str]:
+        if not (self.layout.metadata / "state.db").exists():
+            return []
+        sql = "SELECT id FROM snapshots ORDER BY created_at DESC"
+        params: tuple[object, ...] = ()
+        if limit is not None:
+            sql += " LIMIT ?"
+            params = (limit,)
+        rows = self.db.query(sql, params)
+        return [str(row["id"]) for row in rows]
+
     def _load_intent_state(self) -> dict[str, Any]:
         path = self.layout.working_set / "intent_state.json"
         if not path.exists():
             return {}
         return cast(dict[str, Any], orjson.loads(path.read_bytes()))
 
+    def _status_intent_payload(self, latest_snapshot_id: str | None) -> dict[str, Any]:
+        intent_payload = self._load_intent_state()
+        if latest_snapshot_id is None:
+            return intent_payload
+
+        snapshot_intent = self._load_snapshot(latest_snapshot_id).intent.model_dump(mode="json")
+        merged = dict(snapshot_intent)
+        for key, value in intent_payload.items():
+            if value not in ("", [], {}, None):
+                merged[key] = value
+        return merged
+
     def _new_snapshot_id(self) -> str:
         ts = datetime.now(UTC).strftime("%Y%m%d%H%M%S")
         return f"snap-{ts}-{uuid4().hex[:8]}"
+
+    def _snapshot_summary(self, snapshot: Snapshot) -> SnapshotSummary:
+        return SnapshotSummary(
+            id=snapshot.id,
+            created_at=snapshot.created_at,
+            branch=snapshot.working_set.branch,
+            developer_goal=snapshot.intent.developer_goal,
+            active_task_count=len(snapshot.intent.active_tasks),
+            active_file_count=len(snapshot.working_set.active_files),
+            file_count=len(snapshot.fingerprints),
+            prompt_path=str(self.layout.prompts / f"{snapshot.id}.prompt.md"),
+        )
 
     def _write_project_handoff(self, snapshot: Snapshot, prompt_text: str) -> None:
         agents_dir = self.layout.agents
