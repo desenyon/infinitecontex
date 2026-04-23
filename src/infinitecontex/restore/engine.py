@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 
 from infinitecontex.capture.git_state import current_branch
 from infinitecontex.core.models import RestoreReport, Snapshot
+
+
+def _file_sha1(path: Path) -> str:
+    return hashlib.sha1(path.read_bytes()).hexdigest()
 
 
 def validate_restore(snapshot: Snapshot, project_root: Path) -> RestoreReport:
@@ -25,7 +30,8 @@ def validate_restore(snapshot: Snapshot, project_root: Path) -> RestoreReport:
         if not path.exists():
             missing_items.append(rel)
             continue
-        if int(path.stat().st_mtime) != int(fp.mtime):
+        stat = path.stat()
+        if stat.st_size != fp.size or _file_sha1(path) != fp.sha1:
             changed_items.append(rel)
         else:
             valid_items.append(rel)
