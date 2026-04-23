@@ -102,3 +102,48 @@ def test_cli_config_resolves_set_file_from_project_root(
     )
 
     assert result.exit_code == 0
+
+
+def test_cli_snapshot_history_compare_and_pin_management(tmp_repo: Path) -> None:
+    runner = CliRunner()
+
+    init_result = runner.invoke(app, ["init", "--project-root", str(tmp_repo)])
+    assert init_result.exit_code == 0
+
+    first = runner.invoke(app, ["snapshot", "--goal", "baseline", "--project-root", str(tmp_repo), "--json"])
+    assert first.exit_code == 0
+
+    (tmp_repo / "app.py").write_text("def run():\n    return 2\n", encoding="utf-8")
+    second = runner.invoke(
+        app,
+        ["snapshot", "--goal", "upgrade tooling", "--project-root", str(tmp_repo), "--json"],
+    )
+    assert second.exit_code == 0
+
+    history = runner.invoke(app, ["snapshots", "--project-root", str(tmp_repo), "--json"])
+    assert history.exit_code == 0
+    assert '"developer_goal": "upgrade tooling"' in history.stdout
+
+    show = runner.invoke(app, ["show-snapshot", "--project-root", str(tmp_repo), "--json"])
+    assert show.exit_code == 0
+    assert '"prompt_path"' in show.stdout
+
+    compare = runner.invoke(app, ["compare-snapshots", "--project-root", str(tmp_repo), "--json"])
+    assert compare.exit_code == 0
+    assert "changed_tracked_files" in compare.stdout
+    assert "app.py" in compare.stdout
+
+    pin = runner.invoke(app, ["pin", "--path", "app.py", "--note", "entry", "--project-root", str(tmp_repo)])
+    assert pin.exit_code == 0
+
+    pins = runner.invoke(app, ["pins", "--project-root", str(tmp_repo), "--json"])
+    assert pins.exit_code == 0
+    assert '"path": "app.py"' in pins.stdout
+    assert '"note": "entry"' in pins.stdout
+
+    unpin = runner.invoke(app, ["unpin", "--path", "app.py", "--project-root", str(tmp_repo)])
+    assert unpin.exit_code == 0
+
+    pins_after = runner.invoke(app, ["pins", "--project-root", str(tmp_repo), "--json"])
+    assert pins_after.exit_code == 0
+    assert pins_after.stdout.strip() == "[]"
