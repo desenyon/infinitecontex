@@ -2,6 +2,26 @@
 
 All notable changes to this project are documented here.
 
+## [0.3.0] - 2026-04-22
+
+### Added
+
+- Added `snapshots` to browse memory history with created-at, branch, goal, and workload counts.
+- Added `show-snapshot` to inspect a stored snapshot, its metrics, and generated prompt artifact path.
+- Added `compare-snapshots` to diff tracked files, tasks, issues, and metric deltas between captures.
+- Added `pins` and `unpin` so pinned context is fully manageable from both the CLI and Python API.
+
+### Changed
+
+- Expanded `status` with snapshot counts and latest capture timestamps.
+- Bumped the release to `0.3.0` and updated the API surface for snapshot history and pin management.
+
+### Fixed
+
+- Snapshot comparisons now catch real content drift instead of relying only on mtimes.
+- Import validation now rejects unsafe archive escapes and link entries.
+- Default include patterns now correctly capture root-level files like `app.py`.
+
 ## [0.2.0] - 2026-03-15
 
 ### Changed
