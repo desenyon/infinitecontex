@@ -9,6 +9,7 @@ def test_scan_respects_include_exclude_patterns(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     (root / "src").mkdir()
+    (root / "app.py").write_text("print('root')\n", encoding="utf-8")
     (root / "src" / "a.py").write_text("print('a')\n", encoding="utf-8")
     (root / "src" / "ignore.pyc").write_text("x", encoding="utf-8")
     (root / "README.md").write_text("r", encoding="utf-8")
@@ -22,6 +23,7 @@ def test_scan_respects_include_exclude_patterns(tmp_path: Path) -> None:
     )
 
     paths = {fp.path for fp in fingerprints}
+    assert "app.py" in paths
     assert "src/a.py" in paths
     assert "README.md" in paths
     assert "src/ignore.pyc" not in paths
