@@ -251,3 +251,85 @@ See [CHANGELOG.md](CHANGELOG.md) for release history. The `0.3.1` release adds t
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+<!-- architecture-atlas-v5:start -->
+## Architecture Atlas v5
+
+These editable Mermaid diagrams mirror the [Notion architecture dossier](https://app.notion.com/p/3b467342e8c1814eadb4df76f13362cd?pvs=204).
+
+### 1. Memory anatomy
+
+```mermaid
+flowchart LR
+  CLI["CLI commands<br>snapshot, session, status, compare, prompt, restore"] --> ROOT["Project-root resolver + configuration"]
+  ROOT --> COLLECT["Snapshot collector"]
+  COLLECT --> GIT["Git probes<br>branch, commits, diff, changed files"]
+  COLLECT --> FS["Filesystem probes<br>structure, filtered working set"]
+  COLLECT --> INTENT["Intent plane<br>goal, tasks, pins, notes, decisions, ingested chat"]
+  GIT --> NORMAL["Canonical snapshot normalizer"]
+  FS --> NORMAL
+  INTENT --> NORMAL
+  NORMAL --> DB[(".infctx/metadata/state.db")]
+  NORMAL --> SNAP[(".infctx/snapshots")]
+  DB --> COMPARE["Snapshot comparator"]
+  DB --> BRIEFS["Agent brief generator<br>overview, architecture, behavior, decisions, changes"]
+  DB --> PROMPT["Restore prompt budgeter"]
+  DB --> VALIDATE["Restore-state validator"]
+  BRIEFS --> AGENTS[(".infctx/agents/*.md")]
+  PROMPT --> PROMPTS[(".infctx/prompts")]
+```
+
+### 2. Live-session wiring
+
+```mermaid
+flowchart TB
+  START["infctx session --goal ..."] --> FIRST["Immediate baseline snapshot"] --> WATCH["Filtered file watcher"]
+  WATCH --> IGNORE{"Noise or .infctx self-change?"}
+  IGNORE -->|yes| WATCH
+  IGNORE -->|no| DEBOUNCE["Debounce and collect changed repository signals"] --> NEW["Write immutable snapshot + relational metadata"]
+  NEW --> REFRESH["Regenerate agent-facing Markdown"] --> WATCH
+  DB[("SQLite metadata")] --> SEARCH["Local memory search"]
+  DB --> DIFF["Snapshot-to-snapshot semantic diff"]
+  DB --> RESTORE["Compact restore prompt"]
+  EXPORT["Export/import bundle"] -. portability .-> DB
+  CLEAN["Retention + compaction"] -. maintenance .-> DB
+```
+
+### 3. Resume narrative
+
+```mermaid
+sequenceDiagram
+  actor Dev as Developer or coding agent
+  participant C as Collector
+  participant M as Memory store
+  participant G as Brief generator
+  participant R as Restore pipeline
+  Dev->>C: snapshot goal, repository state, intent, pins, decisions
+  C->>M: immutable snapshot + normalized entities
+  M->>G: latest state and relevant history
+  G->>M: regenerated agent handoff files
+  Dev->>R: request restore prompt under token budget
+  R->>M: retrieve goal, active tasks, recent changes, decisions, pins
+  R-->>Dev: compact evidence-backed resume context
+  Dev->>R: validate current project against snapshot
+  R-->>Dev: matched, drifted, missing, or stale state
+```
+
+### 4. Reliability model
+
+```mermaid
+stateDiagram-v2
+  [*] --> UNINITIALIZED
+  UNINITIALIZED --> INITIALIZED
+  INITIALIZED --> SNAPSHOTTING --> SNAPSHOT_COMMITTED --> BRIEFS_REFRESHED
+  BRIEFS_REFRESHED --> WATCHING
+  WATCHING --> SNAPSHOTTING: meaningful project change
+  SNAPSHOT_COMMITTED --> COMPARING
+  SNAPSHOT_COMMITTED --> PROMPTING
+  SNAPSHOT_COMMITTED --> RESTORE_VALIDATION
+  RESTORE_VALIDATION --> MATCHED
+  RESTORE_VALIDATION --> DRIFT_DETECTED
+  DRIFT_DETECTED --> SNAPSHOTTING
+```
+
+<!-- architecture-atlas-v5:end -->
