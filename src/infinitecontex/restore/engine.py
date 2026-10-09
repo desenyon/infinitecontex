@@ -7,10 +7,12 @@ from pathlib import Path
 
 from infinitecontex.capture.git_state import current_branch
 from infinitecontex.core.models import RestoreReport, Snapshot
+from infinitecontex.storage.paths import project_file
 
 
 def _file_sha1(path: Path) -> str:
-    return hashlib.sha1(path.read_bytes()).hexdigest()
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha1").hexdigest()
 
 
 def validate_restore(snapshot: Snapshot, project_root: Path) -> RestoreReport:
@@ -26,15 +28,18 @@ def validate_restore(snapshot: Snapshot, project_root: Path) -> RestoreReport:
     tracked = {fp.path: fp for fp in snapshot.fingerprints}
 
     for rel, fp in tracked.items():
-        path = project_root / rel
-        if not path.exists():
-            missing_items.append(rel)
-            continue
-        stat = path.stat()
-        if stat.st_size != fp.size or _file_sha1(path) != fp.sha1:
-            changed_items.append(rel)
-        else:
-            valid_items.append(rel)
+        try:
+            path = project_file(project_root, rel)
+            if not path.is_file():
+                missing_items.append(rel)
+                continue
+            stat = path.stat()
+            if stat.st_size != fp.size or _file_sha1(path) != fp.sha1:
+                changed_items.append(rel)
+            else:
+                valid_items.append(rel)
+        except (ValueError, OSError):
+            stale_items.append(f"unsafe or unreadable path: {rel}")
 
     summary = (
         f"stale={len(stale_items)} missing={len(missing_items)} changed={len(changed_items)} valid={len(valid_items)}"

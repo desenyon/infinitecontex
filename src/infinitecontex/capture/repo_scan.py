@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Iterable
 
 from infinitecontex.core.models import BehavioralContext, FileFingerprint, FileInsight, StructuralContext
+from infinitecontex.storage.paths import project_file
 
 KEY_FILE_NAMES = {
     "pyproject.toml",
@@ -23,6 +24,16 @@ KEY_FILE_NAMES = {
 }
 
 FILE_INSIGHT_LIMIT = 20
+MAX_FILE_BYTES = 2 * 1024 * 1024
+
+
+def _read_source(path: Path, root: Path, max_bytes: int = MAX_FILE_BYTES) -> bytes:
+    safe = project_file(root, path.relative_to(root).as_posix())
+    with safe.open("rb") as stream:
+        data = stream.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        raise ValueError(f"file exceeds capture byte limit: {path}")
+    return data
 
 
 def _matches_pattern(rel_path: str, patterns: list[str]) -> bool:
@@ -43,23 +54,33 @@ def _iter_files(
     include_patterns: list[str] | None = None,
     exclude_patterns: list[str] | None = None,
 ) -> Iterable[Path]:
-    include = include_patterns or ["**/*", "*"]
-    exclude = exclude_patterns or [".git/**", ".infctx/**", ".venv/**", "__pycache__/**", "**/*.pyc"]
+    root = root.resolve()
+    include = ["**/*", "*"] if include_patterns is None else include_patterns
+    exclude = (
+        exclude_patterns
+        if exclude_patterns is not None
+        else [".git/**", ".infctx/**", ".venv/**", "__pycache__/**", "**/*.pyc"]
+    )
 
     for dirpath, dirnames, filenames in os.walk(root):
         rel_dir = Path(dirpath).relative_to(root).as_posix()
         current_dir = "" if rel_dir == "." else f"{rel_dir}/"
 
         pruned_dirs = []
-        for d in dirnames:
+        for d in sorted(dirnames):
             rel_d = f"{current_dir}{d}"
-            if not _matches_pattern(rel_d, exclude):
+            if (
+                not d.startswith(".infctx")
+                and d != ".git"
+                and not (Path(dirpath) / d).is_symlink()
+                and not _matches_pattern(rel_d, exclude)
+            ):
                 pruned_dirs.append(d)
         dirnames[:] = pruned_dirs
 
-        for f in filenames:
+        for f in sorted(filenames):
             rel = f"{current_dir}{f}"
-            if _matches_pattern(rel, exclude):
+            if f in {".git", ".infctx.lock"} or _matches_pattern(rel, exclude):
                 continue
             if not _matches_pattern(rel, include):
                 continue
@@ -67,7 +88,7 @@ def _iter_files(
 
 
 def _fingerprint(path: Path, root: Path) -> FileFingerprint:
-    data = path.read_bytes()
+    data = _read_source(path, root)
     stat = path.stat()
     return FileFingerprint(
         path=path.relative_to(root).as_posix(),
@@ -93,7 +114,7 @@ def _trim_summary(text: str, max_len: int = 150) -> str:
 
 def _python_file_insight(path: Path, root: Path) -> FileInsight:
     rel_path = path.relative_to(root).as_posix()
-    src = path.read_text(encoding="utf-8", errors="ignore")
+    src = _read_source(path, root).decode("utf-8", errors="ignore")
 
     try:
         tree = ast.parse(src)
@@ -118,7 +139,7 @@ def _python_file_insight(path: Path, root: Path) -> FileInsight:
 
 def _text_file_insight(path: Path, root: Path) -> FileInsight:
     rel_path = path.relative_to(root).as_posix()
-    text = path.read_text(encoding="utf-8", errors="ignore")
+    text = _read_source(path, root).decode("utf-8", errors="ignore")
     summary = _first_meaningful_line(text) or f"Text file: {path.name}"
     return FileInsight(path=rel_path, summary=_trim_summary(summary), symbols=[])
 
@@ -138,10 +159,13 @@ def _build_file_insights(
         path = root / rel_path
         if not path.exists() or not path.is_file():
             continue
-        if path.suffix == ".py":
-            insights.append(_python_file_insight(path, root))
-        elif path.suffix in {".md", ".toml", ".json", ".yaml", ".yml", ".ini"} or path.name == "README.md":
-            insights.append(_text_file_insight(path, root))
+        try:
+            if path.suffix == ".py":
+                insights.append(_python_file_insight(path, root))
+            elif path.suffix in {".md", ".toml", ".json", ".yaml", ".yml", ".ini"} or path.name == "README.md":
+                insights.append(_text_file_insight(path, root))
+        except (OSError, ValueError):
+            continue
     return insights
 
 
@@ -151,15 +175,20 @@ def scan_structural(
     include_patterns: list[str] | None = None,
     exclude_patterns: list[str] | None = None,
 ) -> tuple[StructuralContext, list[FileFingerprint]]:
-    files = []
+    root = root.resolve()
+    files: list[str] = []
     fingerprints: list[FileFingerprint] = []
     iter_files = _iter_files(root, include_patterns=include_patterns, exclude_patterns=exclude_patterns)
-    for idx, file_path in enumerate(iter_files):
-        if idx >= max_files:
+    for file_path in iter_files:
+        if len(files) >= max_files:
             break
         rel = file_path.relative_to(root).as_posix()
+        try:
+            fingerprint = _fingerprint(file_path, root)
+        except (OSError, ValueError):
+            continue
         files.append(rel)
-        fingerprints.append(_fingerprint(file_path, root))
+        fingerprints.append(fingerprint)
 
     modules: dict[str, list[str]] = {}
     entry_points: list[str] = []
@@ -185,13 +214,19 @@ def scan_structural(
         summary = ""
         init_file = dpath / "__init__.py"
         readme_file = dpath / "README.md"
-        if readme_file.exists():
-            text = readme_file.read_text(encoding="utf-8", errors="ignore").strip()
+        if readme_file.relative_to(root).as_posix() in files:
+            try:
+                text = _read_source(readme_file, root).decode("utf-8", errors="ignore").strip()
+            except (OSError, ValueError):
+                continue
             lines = [line for line in text.splitlines() if line.strip() and not line.startswith("#")]
             if lines:
                 summary = lines[0][:150] + ("..." if len(lines[0]) > 150 else "")
-        elif init_file.exists():
-            text = init_file.read_text(encoding="utf-8", errors="ignore")
+        elif init_file.relative_to(root).as_posix() in files:
+            try:
+                text = _read_source(init_file, root).decode("utf-8", errors="ignore")
+            except (OSError, ValueError):
+                continue
             try:
                 tree = ast.parse(text)
                 doc = ast.get_docstring(tree)
@@ -217,23 +252,26 @@ def scan_structural(
 
 
 def scan_behavioral(root: Path, file_paths: list[str]) -> BehavioralContext:
+    root = root.resolve()
     call_hints: dict[str, list[str]] = {}
     routes_or_commands: list[str] = []
     test_surfaces: list[str] = []
     scripts: dict[str, str] = {}
 
     for rel in file_paths:
+        try:
+            text = _read_source(project_file(root, rel), root).decode("utf-8", errors="ignore")
+        except (OSError, ValueError):
+            continue
         if rel.endswith(("test.py", "_test.py")) or "tests/" in rel:
             test_surfaces.append(rel)
         if rel == "pyproject.toml":
-            text = (root / rel).read_text(encoding="utf-8", errors="ignore")
             for line in text.splitlines():
                 if line.strip().startswith("infctx"):
                     scripts["infctx"] = line.strip()
 
         if rel.endswith(".py"):
-            path = root / rel
-            src = path.read_text(encoding="utf-8", errors="ignore")
+            src = text
             if "@app." in src or "@router." in src:
                 routes_or_commands.append(rel)
 

@@ -18,7 +18,9 @@ from watchfiles import Change, watch
 
 from infinitecontex.core.config import AppConfig, load_app_config
 from infinitecontex.core.models import PromptMode
+from infinitecontex.core.serde import write_text
 from infinitecontex.service import InfiniteContextService
+from infinitecontex.storage.paths import checked_path
 from infinitecontex.version import __version__
 
 app = typer.Typer(help="Infinite Context: local-first project memory engine", invoke_without_command=True)
@@ -97,7 +99,7 @@ def _filter_watch_changes(changes: set[tuple[Change, str]], root: Path, exclude_
             rel_path = Path(changed_path).resolve().relative_to(root).as_posix()
         except Exception:
             continue
-        if _matches_pattern(rel_path, exclude_patterns):
+        if rel_path.split("/", 1)[0].startswith(".infctx") or _matches_pattern(rel_path, exclude_patterns):
             continue
         if rel_path not in relevant:
             relevant.append(rel_path)
@@ -120,7 +122,7 @@ def _format_dict(d: dict[str, object], title: str) -> Panel:
 
 def _emit(payload: object, as_json: bool, format_type: str = "generic") -> None:
     if as_json:
-        console.print(orjson.dumps(payload, option=orjson.OPT_INDENT_2).decode())
+        typer.echo(orjson.dumps(payload, option=orjson.OPT_INDENT_2).decode())
         return
 
     if isinstance(payload, str):
@@ -234,6 +236,10 @@ def _emit(payload: object, as_json: bool, format_type: str = "generic") -> None:
                 "selected_path": payload.get("selected_path"),
             }
             console.print(_format_dict(summary, "Chat Ingestion Result"))
+            if payload.get("persisted") is False:
+                console.print(
+                    "Persistence disabled: preview only. Enable policies.privacy.persist_chat_ingest to save."
+                )
         elif format_type == "session":
             console.print(_format_dict(payload, "Session Capture"))
         elif format_type == "restore":
@@ -537,12 +543,26 @@ def setup_agent(
         target = root / ".windsurfrules"
     elif agent == "copilot":
         target = root / ".github" / "copilot-instructions.md"
-        target.parent.mkdir(parents=True, exist_ok=True)
     else:
         console.print(f"[red]Error:[/red] Unsupported agent '{agent}'.")
         raise typer.Exit(1)
 
-    target.write_text(content, encoding="utf-8")
+    def install_instructions() -> None:
+        checked_path(root, target)
+        begin, end = "<!-- infinitecontex:start -->", "<!-- infinitecontex:end -->"
+        block = f"{begin}\n{content}{end}"
+        existing = target.read_text(encoding="utf-8") if target.exists() else ""
+        if begin in existing or end in existing:
+            if existing.count(begin) != 1 or existing.count(end) != 1:
+                raise ValueError("ambiguous Infinite Context instruction markers; fix the file before setup-agent")
+            start, finish = existing.index(begin), existing.index(end)
+            if finish < start:
+                raise ValueError("invalid Infinite Context instruction marker order")
+            updated = existing[:start] + block + existing[finish + len(end):]
+        else:
+            updated = existing.rstrip() + ("\n\n" if existing.strip() else "") + block + "\n"
+        write_text(target, updated)
+    _run_action(install_instructions, emit=False)
     console.print(f"[green]Successfully wired[/green] {agent} to Infinite Context via {target.relative_to(root)}")
 
 
@@ -867,26 +887,30 @@ def watch_loop(
 
 @app.command("cleanup")
 def cleanup(
-    keep: Annotated[int, typer.Option("--keep", help="Number of recent snapshots to keep")] = 10,
+    keep: Annotated[int, typer.Option("--keep", min=0, help="Number of recent snapshots to keep")] = 10,
     project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
     yes: Annotated[bool, typer.Option("--yes", help="Confirm deletion of old snapshots")] = False,
 ) -> None:
     """Prune old snapshots and compact the local memory database."""
     svc = _service(project_root)
-    rows = svc.db.query("SELECT id FROM snapshots ORDER BY created_at DESC")
+    rows = svc.snapshots_recent(limit=1_000_000)
     if len(rows) <= keep:
         console.print(Panel(f"Only {len(rows)} snapshots exist. Kept all.", border_style="green", expand=False))
         return
 
-    to_delete = [str(r["id"]) for r in rows[keep:]]
+    to_delete = [r.id for r in rows[keep:]]
     if not yes:
         _print_error(f"Cleanup would remove {len(to_delete)} snapshots. Re-run with `--yes` to confirm.")
         raise typer.Exit(1)
-    for snap_id in to_delete:
-        svc.db.execute("DELETE FROM snapshots WHERE id = ?", (snap_id,))
-        snap_file = svc.layout.snapshots / f"{snap_id}.json"
-        if snap_file.exists():
-            snap_file.unlink()
-
-    svc.db.execute("VACUUM")
+    removed = _run_action(lambda: svc.cleanup(keep), emit=False)
+    to_delete = removed if isinstance(removed, list) else []
     console.print(Panel(f"Removed {len(to_delete)} old snapshots and compacted the database.", border_style="green"))
+
+
+@app.command("repair")
+def repair(
+    project_root: Annotated[Path | None, typer.Option("--project-root")] = None,
+    json: Annotated[bool, typer.Option("--json")] = False,
+) -> None:
+    """Rebuild snapshot files, search entries, graph, and handoff from committed state."""
+    _run_action(lambda: _service(project_root).repair(), as_json=json)

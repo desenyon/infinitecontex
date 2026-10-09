@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+import re
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class TokenPolicy(BaseModel):
@@ -28,6 +30,16 @@ class PrivacyPolicy(BaseModel):
             r"(?i)password\s*[:=]\s*\S+",
         ]
     )
+
+    @field_validator("redact_patterns")
+    @classmethod
+    def valid_patterns(cls, patterns: list[str]) -> list[str]:
+        for pattern in patterns:
+            try:
+                re.compile(pattern)
+            except re.error as exc:
+                raise ValueError(f"invalid redaction expression: {pattern}") from exc
+        return patterns
 
 
 class RuntimePolicies(BaseModel):

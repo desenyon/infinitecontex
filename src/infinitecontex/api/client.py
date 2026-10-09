@@ -84,3 +84,9 @@ class InfiniteContextClient:
 
     def set_config(self, config: AppConfig) -> None:
         self.service.config_set(config)
+
+    def repair(self) -> dict[str, object]:
+        return self.service.repair()
+
+    def cleanup(self, keep: int = 10) -> list[str]:
+        return self.service.cleanup(keep)

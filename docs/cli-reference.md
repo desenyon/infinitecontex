@@ -48,3 +48,15 @@ Notes:
 - `cleanup` requires `--yes` when it will delete old snapshots.
 - `config --set-file` resolves relative preset paths against `--project-root` when provided.
 - For reliable intent capture, prefer `ingest-chat --file` over `ingest-chat --auto`.
+
+## Recovery and retention (0.4.0)
+
+```bash
+infctx doctor --json
+infctx repair --json
+infctx cleanup --keep 20 --yes
+```
+
+Doctor is diagnostic and does not initialize a missing database. Repair migrates legacy state and rebuilds derived snapshot files, canonical prompts, snapshot search, and latest graph/handoff. Cleanup also removes derived artifacts and snapshot search rows; zero clears the latest handoff, and negative counts are rejected. CLI/client names and file paths remain compatible.
+
+`ingest-chat` now reports `persisted` in JSON. With the default privacy flags it returns a redacted preview without saving chat state. Enable `policies.privacy.persist_chat_ingest` explicitly to save intent and search content. `setup-agent` updates a managed block, retaining existing instructions outside it.

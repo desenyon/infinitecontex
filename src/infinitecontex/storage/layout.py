@@ -5,7 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from infinitecontex.core.serde import dump_json
+from infinitecontex.core.serde import dump_json, load_json
+from infinitecontex.storage.paths import validate_state_tree
 
 
 @dataclass(frozen=True)
@@ -26,6 +27,8 @@ class InfctxLayout:
 
 
 def build_layout(project_root: Path) -> InfctxLayout:
+    project_root = project_root.resolve()
+    validate_state_tree(project_root)
     base = project_root / ".infctx"
     return InfctxLayout(
         root=base,
@@ -46,11 +49,14 @@ def build_layout(project_root: Path) -> InfctxLayout:
 
 def initialize_layout(project_root: Path) -> InfctxLayout:
     layout = build_layout(project_root)
+    manifest_path = layout.metadata / "manifest.json"
+    if manifest_path.exists() and int(load_json(manifest_path).get("schema_version", 1)) > 2:
+        raise ValueError("unsupported storage manifest version; upgrade infinitecontex")
     for path in layout.__dict__.values():
-        path.mkdir(parents=True, exist_ok=True)
+        path.mkdir(parents=True, exist_ok=True, mode=0o700)
 
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
         "name": "Infinite Context",
         "storage": {
             "db": "metadata/state.db",

@@ -11,12 +11,15 @@ class RetrievalEngine:
         self.db = db
 
     def index_document(self, source: str, key: str, body: str) -> None:
-        self.db.execute(
-            "INSERT INTO search_docs(source, key, body) VALUES (?, ?, ?)",
-            (source, key, body),
-        )
+        with self.db.transaction() as conn:
+            conn.execute("DELETE FROM search_docs WHERE source = ? AND key = ?", (source, key))
+            conn.execute("INSERT INTO search_docs(source, key, body) VALUES (?, ?, ?)", (source, key, body))
 
     def search(self, query: str, limit: int = 10) -> list[SearchResult]:
+        if limit < 0:
+            raise ValueError("limit must be nonnegative")
+        if not query.strip() or not self.db.db_path.exists():
+            return []
         rows = self.db.query(
             """
             SELECT source, key, body,
