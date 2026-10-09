@@ -54,3 +54,9 @@ Example:
   ]
 }
 ```
+
+## 0.4.0 behavior
+
+Persistence flags default to false and are enforced. Chat ingestion is a redacted preview unless `policies.privacy.persist_chat_ingest` is true. Terminal signals require `persist_shell_history`. Neither setting erases historical data. Invalid redaction expressions and nonpositive `capture_max_files` are rejected. Empty include patterns admit no files. Internal state exclusions cannot be disabled.
+
+`config --set-file` writes a full validated configuration, filling omitted fields with defaults. `project_name`, `modes`, token min/max, and summarization knobs remain accepted for compatibility but are not all consulted by capture/rendering. See the [README field table](../README.md#configuration) for the precise active settings and limitations.

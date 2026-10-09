@@ -13,11 +13,12 @@ import orjson
 from pydantic import BaseModel, Field
 
 from infinitecontex.core.policies import RuntimePolicies
+from infinitecontex.core.serde import dump_json
 
 
 class AppConfig(BaseModel):
     project_name: str = ""
-    capture_max_files: int = 1500
+    capture_max_files: int = Field(default=1500, ge=1)
     include_patterns: list[str] = Field(default_factory=lambda: ["**/*.py", "**/*.md", "pyproject.toml"])
     exclude_patterns: list[str] = Field(
         default_factory=lambda: [
@@ -104,4 +105,4 @@ def _env_int(key: str) -> int | None:
 def save_repo_config(project_root: Path, config: AppConfig) -> None:
     cfg_path = project_root / ".infctx" / "config.json"
     cfg_path.parent.mkdir(parents=True, exist_ok=True)
-    cfg_path.write_bytes(orjson.dumps(config.model_dump(), option=orjson.OPT_INDENT_2))
+    dump_json(cfg_path, config.model_dump(mode="json"))

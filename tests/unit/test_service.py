@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
+from infinitecontex.core.config import AppConfig
 from infinitecontex.service import InfiniteContextService
 
 
@@ -143,6 +144,9 @@ def test_service_write_handoff_empty_fields(tmp_path: Path) -> None:
 def test_service_status_includes_intent_summary(tmp_path: Path) -> None:
     svc = InfiniteContextService(tmp_path)
     svc.init()
+    config = AppConfig()
+    config.policies.privacy.persist_chat_ingest = True
+    svc.config_set(config)
     svc._finalize_ingest(
         {
             "developer_goal": "overhaul the cli",
@@ -178,6 +182,9 @@ def test_service_status_falls_back_to_latest_snapshot_intent(tmp_repo: Path) -> 
 def test_service_snapshot_history_and_compare(tmp_repo: Path) -> None:
     svc = InfiniteContextService(tmp_repo)
     svc.init()
+    config = AppConfig()
+    config.policies.privacy.persist_chat_ingest = True
+    svc.config_set(config)
     first = svc.snapshot(goal="baseline")
 
     svc._finalize_ingest(

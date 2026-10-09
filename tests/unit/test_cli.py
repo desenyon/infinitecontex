@@ -10,6 +10,7 @@ from watchfiles import Change
 
 import infinitecontex.cli as cli_module
 from infinitecontex.cli import _emit, _filter_watch_changes, _matches_pattern, _run_action, app
+from infinitecontex.core.config import AppConfig, save_repo_config
 
 
 def test_cli_init_and_status(tmp_repo: Path) -> None:
@@ -34,6 +35,9 @@ def test_cli_accepts_project_root_as_global_option(tmp_repo: Path) -> None:
 
 
 def test_cli_search_renders_search_result_fields(tmp_repo: Path) -> None:
+    config = AppConfig()
+    config.policies.privacy.persist_chat_ingest = True
+    save_repo_config(tmp_repo, config)
     runner = CliRunner()
 
     init_result = runner.invoke(app, ["init", "--project-root", str(tmp_repo)])
@@ -63,9 +67,10 @@ def test_cli_session_once_creates_initial_snapshot(tmp_repo: Path) -> None:
     assert '"goal": "ship release"' in result.stdout
 
 
-def test_cli_ingest_chat_auto_indexes_discovered_text(
-    tmp_repo: Path, monkeypatch: MonkeyPatch
-) -> None:
+def test_cli_ingest_chat_auto_indexes_discovered_text(tmp_repo: Path, monkeypatch: MonkeyPatch) -> None:
+    config = AppConfig()
+    config.policies.privacy.persist_chat_ingest = True
+    save_repo_config(tmp_repo, config)
     runner = CliRunner()
     init_result = runner.invoke(app, ["init", "--project-root", str(tmp_repo)])
     assert init_result.exit_code == 0
@@ -95,9 +100,7 @@ def test_cli_ingest_chat_auto_indexes_discovered_text(
     assert "overhaul search" in search_result.stdout.lower()
 
 
-def test_cli_config_resolves_set_file_from_project_root(
-    tmp_repo: Path, monkeypatch: MonkeyPatch
-) -> None:
+def test_cli_config_resolves_set_file_from_project_root(tmp_repo: Path, monkeypatch: MonkeyPatch) -> None:
     runner = CliRunner()
     (tmp_repo / "config").mkdir()
     (tmp_repo / "config" / "default.json").write_text('{"capture_max_files": 42}', encoding="utf-8")
@@ -517,9 +520,7 @@ def test_cli_session_live_handles_change_batches(tmp_repo: Path, monkeypatch: Mo
     assert result.exit_code == 0
 
 
-def test_cli_session_live_handles_cooldown_and_snapshot_failure(
-    tmp_repo: Path, monkeypatch: MonkeyPatch
-) -> None:
+def test_cli_session_live_handles_cooldown_and_snapshot_failure(tmp_repo: Path, monkeypatch: MonkeyPatch) -> None:
     runner = CliRunner()
 
     def fake_watch(_root: Path, debounce: int) -> list[set[tuple[Change, str]]]:
@@ -571,3 +572,44 @@ def test_cli_watch_delegates_to_session(tmp_repo: Path, monkeypatch: MonkeyPatch
         "once": False,
         "json": False,
     }
+
+
+def test_setup_agent_preserves_user_instructions_and_is_idempotent(tmp_repo: Path) -> None:
+    runner = CliRunner()
+    path = tmp_repo / "CLAUDE.md"
+    path.write_text("# Existing project rules\nKeep user changes.\n")
+    for _ in range(2):
+        result = runner.invoke(app, ["setup-agent", "claude", "--project-root", str(tmp_repo)])
+        assert result.exit_code == 0
+    content = path.read_text()
+    assert content.startswith("# Existing project rules\nKeep user changes.")
+    assert content.count("<!-- infinitecontex:start -->") == 1
+
+
+def test_setup_agent_rejects_symlink_destination(tmp_repo: Path, tmp_path: Path) -> None:
+    external = tmp_path / "external.md"
+    external.write_text("Keep me")
+    (tmp_repo / "CLAUDE.md").symlink_to(external)
+    result = CliRunner().invoke(app, ["setup-agent", "claude", "--project-root", str(tmp_repo)])
+    assert result.exit_code == 1
+    assert external.read_text() == "Keep me"
+
+
+def test_cli_repair_and_preview(tmp_repo: Path, tmp_path: Path) -> None:
+    chat = tmp_path / "chat.txt"
+    chat.write_text("goal: previewmarker")
+    runner = CliRunner()
+    result = runner.invoke(app, ["ingest-chat", "--file", str(chat), "--project-root", str(tmp_repo)])
+    assert result.exit_code == 0
+    assert "preview only" in result.stdout
+    result = runner.invoke(app, ["repair", "--project-root", str(tmp_repo), "--json"])
+    assert result.exit_code == 0
+    assert '"status": "repaired"' in result.stdout
+
+
+def test_json_output_preserves_long_strings_and_markup(capsys: pytest.CaptureFixture[str]) -> None:
+    import json
+
+    payload = {"path": "/very/long/" * 40 + "[bold]literal[/bold]"}
+    _emit(payload, True)
+    assert json.loads(capsys.readouterr().out) == payload

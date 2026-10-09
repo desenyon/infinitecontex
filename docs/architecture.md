@@ -1,61 +1,30 @@
 # Architecture
 
-## Capture Layers
+The CLI, `InfiniteContextClient`, and `AgentToolInterface` call `InfiniteContextService`. Capture and rendering stay local; no inference service is required.
 
-`infinitecontex` 0.2.0 builds snapshots from four explicit layers:
+## Capture and policy
 
-1. Repo context
-- `capture/repo_scan.py`
-- Scans files, key files, entry points, directory summaries, and file insights
+- `capture/repo_scan.py`: sorted, filtered, size-bounded scanning and Python AST hints. Directory summaries respect the admitted file set.
+- `capture/git_state.py`: NUL-delimited porcelain status for staged, unstaged, renamed, and untracked paths; branch and recent commits.
+- `capture/working_set.py`: combines Git, pins, and permitted runtime signals.
+- `capture/chat_ingest.py` and `chat_auto_discover.py`: explicit transcript extraction/discovery. The service enforces chat persistence before indexing or saving intent.
+- `core/config.py`, `policies.py`, and `redaction.py`: effective settings, optional capture gates, validated redaction expressions, and redaction before persistence.
+- `storage/paths.py`: shared containment checks for stored state, scanner inputs, and restore validation.
 
-2. Working-set context
-- `capture/git_state.py`
-- `capture/working_set.py`
-- Captures branch, changed files, diffs, pins, and likely next action
+## Commit and materialization
 
-3. Runtime context
-- `capture/terminal.py`
-- Captures failed commands, tracebacks, and failing tests from local terminal logs
+`storage/snapshots.py` is the snapshot repository. A single SQLite transaction inserts the snapshot payload, its canonical prompt search document, and an artifact job. SQLite is authoritative after the version-2 migration; JSON copies are derived.
 
-4. Intent context
-- `capture/chat_ingest.py`
-- `capture/chat_auto_discover.py`
-- Captures goals, decisions, tasks, issues, questions, and source provenance
+Materialization atomically replaces individual JSON/Markdown files, updates the latest graph and legacy handoff, and clears completed jobs. An interrupted job remains retryable. Read APIs serve committed database records even if a JSON copy is missing or corrupt. `repair` schedules a full rebuild and synchronizes snapshot search entries. `cleanup` commits snapshot/search deletion together and queues artifact deletion.
 
-## Assembly Flow
+`storage/locking.py` serializes cooperating service operations across threads and processes using a project lock outside `.infctx`. Reentrant service calls share the lock. SQLite transactions provide rollback on database failures. `core/serde.py` uses temporary files, fsync, and replacement for complete-file publication. Shared handoff files are individually replaced, not published as a single atomic tree.
 
-`service.py` orchestrates the capture stages:
+## Portability
 
-1. Load effective config
-2. Capture repo context
-3. Capture runtime context
-4. Capture working-set context
-5. Capture intent context
-6. Assemble a `Snapshot`
-7. Save snapshot, prompt, search index, graph, and handoff files
+`storage/export_import.py` exports a staged copy using SQLite backup, excluding nested exports. Imports preflight bounded, normalized `.infctx` entries, extract into a staging tree, validate the staged database/configuration/snapshots, then publish with a backup and rollback. A subsequent locked operation recovers an interrupted rename gap.
 
-## Storage
+An archive database replaces destination database state; it does not merge histories. Files without archive replacements retain legacy overlay behavior. Derived snapshot artifacts are reconciled afterward.
 
-The storage layout remains `.infctx/`-based:
+## Boundaries
 
-- `metadata/state.db`
-- `snapshots/*.json`
-- `prompts/*.md`
-- `events/events.jsonl`
-- `graph/context_graph.json`
-- `working_set/intent_state.json`
-
-## CLI Layer
-
-`cli.py` exposes:
-
-- one-off commands like `snapshot`, `prompt`, `status`
-- a structured live workflow through `session`
-- a compatibility alias via `watch`
-
-The CLI now favors:
-
-- immediate feedback
-- filtered live updates
-- consistent Rich output
-- machine-readable `--json` where appropriate
+The local filesystem and cooperating processes are the consistency boundary. The lock does not control old clients, direct SQLite edits, or hostile concurrent filesystem mutation. Repository capture is a best-effort view of a changing worktree. Restore validates state and never checks out source code. See [storage-format.md](storage-format.md) and [security-privacy.md](security-privacy.md).

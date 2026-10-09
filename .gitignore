@@ -18,6 +18,8 @@ htmlcov/
 .idea/
 .env
 .infctx/
+.infctx.lock
+.infctx-import-*/
 dist/
 build/
 *.log

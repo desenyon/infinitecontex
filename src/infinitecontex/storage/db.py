@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
@@ -35,6 +36,14 @@ CREATE TABLE IF NOT EXISTS pins (
   note TEXT NOT NULL,
   created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS artifact_jobs (
+  snapshot_id TEXT PRIMARY KEY,
+  action TEXT NOT NULL CHECK(action IN ('write', 'delete'))
+);
+CREATE TABLE IF NOT EXISTS repository_state (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
 CREATE VIRTUAL TABLE IF NOT EXISTS search_docs USING fts5(source, key, body);
 """
 
@@ -42,10 +51,10 @@ CREATE VIRTUAL TABLE IF NOT EXISTS search_docs USING fts5(source, key, body);
 class Database:
     def __init__(self, db_path: Path) -> None:
         self.db_path = db_path
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
     def connect(self) -> sqlite3.Connection:
-        conn = sqlite3.connect(self.db_path)
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(self.db_path, timeout=30)
         conn.row_factory = sqlite3.Row
         return conn
 
@@ -70,5 +79,18 @@ class Database:
         try:
             cur = conn.execute(sql, params)
             return list(cur.fetchall())
+        finally:
+            conn.close()
+
+    @contextmanager
+    def transaction(self) -> Iterator[sqlite3.Connection]:
+        conn = self.connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            yield conn
+            conn.commit()
+        except BaseException:
+            conn.rollback()
+            raise
         finally:
             conn.close()

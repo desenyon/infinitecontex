@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import warnings
 from datetime import UTC, datetime
+from functools import wraps
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Callable, ParamSpec, TypeVar, cast
 from uuid import uuid4
 
 import orjson
@@ -28,7 +30,7 @@ from infinitecontex.core.models import (
     WorkingSetContext,
 )
 from infinitecontex.core.redaction import redact_list, redact_text
-from infinitecontex.core.serde import dump_json
+from infinitecontex.core.serde import dump_json, write_text
 from infinitecontex.decisions.store import DecisionStore
 from infinitecontex.distill.summarizer import compile_packet
 from infinitecontex.doctor.checks import run_doctor
@@ -40,24 +42,43 @@ from infinitecontex.retrieval.search import RetrievalEngine
 from infinitecontex.storage.db import Database
 from infinitecontex.storage.export_import import export_state, import_state
 from infinitecontex.storage.layout import build_layout, initialize_layout
+from infinitecontex.storage.locking import project_lock
+from infinitecontex.storage.paths import validate_state_tree
+from infinitecontex.storage.snapshots import SnapshotRepository
+
+P = ParamSpec("P")
+T = TypeVar("T")
+
+
+def locked(method: Callable[P, T]) -> Callable[P, T]:
+    @wraps(method)
+    def wrapper(*args: P.args, **kwargs: P.kwargs) -> T:
+        service = cast("InfiniteContextService", args[0])
+        with project_lock(service.project_root):
+            validate_state_tree(service.project_root)
+            return method(*args, **kwargs)
+    return wrapper
 
 
 class InfiniteContextService:
     def __init__(self, project_root: Path) -> None:
-        self.project_root = project_root
-        self.layout = build_layout(project_root)
+        self.project_root = project_root.resolve()
+        self.layout = build_layout(self.project_root)
         self.db = Database(self.layout.metadata / "state.db")
         self.retrieval = RetrievalEngine(self.db)
         self.decisions = DecisionStore(self.db)
         self.compiler = PromptCompiler()
+        self.repository = SnapshotRepository(self.db, self.layout)
 
+    @locked
     def init(self) -> dict[str, str]:
         self.layout = initialize_layout(self.project_root)
-        self.db = Database(self.layout.metadata / "state.db")
-        self.db.migrate()
+        self.repository.initialize(self._render_snapshot)
+        self._repair_pending()
         EventLogger(self.layout.events / "events.jsonl").log("init", {"root": str(self.project_root)})
         return {"status": "initialized", "root": str(self.layout.root)}
 
+    @locked
     def status(self) -> dict[str, object]:
         latest = self._latest_snapshot_id()
         pins = self.list_pins()
@@ -79,6 +100,7 @@ class InfiniteContextService:
             "selected_source": cast(str | None, intent_payload.get("selected_source")),
         }
 
+    @locked
     def snapshot(self, goal: str = "") -> Snapshot:
         self._ensure_ready()
         cfg = load_app_config(self.project_root)
@@ -104,22 +126,20 @@ class InfiniteContextService:
             },
         )
 
+        # Redact captured strings before any durable write or derived artifact.
+        payload = snapshot.model_dump(mode="json")
+        for section in ("structural", "behavioral", "intent", "working_set"):
+            payload[section] = self._redact_value(payload[section], cfg.policies.privacy.redact_patterns)
+        snapshot = Snapshot.model_validate(payload)
         self._save_snapshot(snapshot)
-        packet = compile_packet(snapshot, budget=cfg.policies.token.default_budget)
-        prompt_text = self.compiler.compile(packet, PromptMode.GENERIC_AGENT_RESTORE)
-        prompt_path = self.layout.prompts / f"{snapshot.id}.prompt.md"
-        prompt_path.write_text(prompt_text, encoding="utf-8")
-        self._write_project_handoff(snapshot, prompt_text)
-
-        graph = ContextGraphStore(self.layout.graph / "context_graph.json")
-        graph.add_file_nodes([fp.path for fp in snapshot.fingerprints])
-        graph.add_calls(snapshot.behavioral.call_hints)
-        graph.save()
-
-        self.retrieval.index_document("snapshot", snapshot.id, prompt_text)
-        EventLogger(self.layout.events / "events.jsonl").log("snapshot", {"id": snapshot.id})
+        self._repair_pending()
+        try:
+            EventLogger(self.layout.events / "events.jsonl").log("snapshot", {"id": snapshot.id})
+        except OSError as exc:
+            warnings.warn(f"Snapshot {snapshot.id} committed, but event logging failed: {exc}", RuntimeWarning)
         return snapshot
 
+    @locked
     def restore(self, snapshot_id: str | None = None) -> dict[str, object]:
         resolved_id = snapshot_id if snapshot_id is not None else self._latest_snapshot_id(required=True)
         if resolved_id is None:
@@ -131,8 +151,12 @@ class InfiniteContextService:
         EventLogger(self.layout.events / "events.jsonl").log("restore", {"snapshot": snapshot.id})
         return report.model_dump(mode="json")
 
+    @locked
     def note(self, summary: str, rationale: str, alternatives: list[str], impact: str, tags: list[str]) -> str:
         self._ensure_ready()
+        patterns = load_app_config(self.project_root).policies.privacy.redact_patterns
+        summary, rationale, impact = (redact_text(text, patterns) for text in (summary, rationale, impact))
+        alternatives, tags = redact_list(alternatives, patterns), redact_list(tags, patterns)
         record = DecisionRecord(
             id=f"dec-{uuid4().hex[:12]}",
             summary=summary,
@@ -145,20 +169,26 @@ class InfiniteContextService:
         EventLogger(self.layout.events / "events.jsonl").log("decision", {"id": record.id, "summary": summary})
         return record.id
 
+    @locked
     def pin(self, path: str, note: str) -> None:
         self._ensure_ready()
+        patterns = load_app_config(self.project_root).policies.privacy.redact_patterns
+        # The path is the pin identity used by unpin; redact its descriptive note only.
+        note = redact_text(note, patterns)
         self.db.execute(
             "INSERT OR REPLACE INTO pins(path, note, created_at) VALUES (?, ?, ?)",
             (path, note, datetime.now(UTC).isoformat()),
         )
         EventLogger(self.layout.events / "events.jsonl").log("pin", {"path": path, "note": note})
 
+    @locked
     def list_pins(self) -> list[str]:
         if not (self.layout.metadata / "state.db").exists():
             return []
         rows = self.db.query("SELECT path FROM pins ORDER BY created_at DESC")
         return [str(row["path"]) for row in rows]
 
+    @locked
     def pin_records(self) -> list[PinRecord]:
         if not (self.layout.metadata / "state.db").exists():
             return []
@@ -172,6 +202,7 @@ class InfiniteContextService:
             for row in rows
         ]
 
+    @locked
     def unpin(self, path: str) -> bool:
         self._ensure_ready()
         existing = self.db.query("SELECT 1 FROM pins WHERE path = ? LIMIT 1", (path,))
@@ -181,6 +212,7 @@ class InfiniteContextService:
         EventLogger(self.layout.events / "events.jsonl").log("unpin", {"path": path})
         return True
 
+    @locked
     def ingest_chat(self, chat_path: Path) -> dict[str, object]:
         self._ensure_ready()
         payload = ingest_chat_text(chat_path)
@@ -189,6 +221,7 @@ class InfiniteContextService:
         payload["source_text"] = extract_chat_text(chat_path)
         return self.ingest_chat_payload(payload)
 
+    @locked
     def ingest_chat_payload(self, payload: dict[str, Any]) -> dict[str, object]:
         self._ensure_ready()
         cfg = load_app_config(self.project_root)
@@ -196,14 +229,12 @@ class InfiniteContextService:
         source_text = str(payload.get("source_text", ""))
         source_path = str(payload.get("selected_path") or payload.get("file") or "")
 
-        if source_text:
-            source_key = Path(source_path).name if source_path else str(payload.get("selected_source", "auto-chat"))
+        if source_text and cfg.policies.privacy.persist_chat_ingest:
+            source_key = source_path if source_path else str(payload.get("selected_source", "auto-chat"))
             self.retrieval.index_document("chat", source_key, redact_text(source_text, patterns))
 
-        EventLogger(self.layout.events / "events.jsonl").log(
-            "ingest_chat",
-            {"file": source_path or str(payload.get("selected_source", "auto"))},
-        )
+        if cfg.policies.privacy.persist_chat_ingest:
+            EventLogger(self.layout.events / "events.jsonl").log("ingest_chat", {"persisted": True})
         persisted_payload = dict(payload)
         persisted_payload.pop("source_text", None)
         return self._finalize_ingest(persisted_payload)
@@ -212,16 +243,20 @@ class InfiniteContextService:
         cfg = load_app_config(self.project_root)
         patterns = cfg.policies.privacy.redact_patterns
         payload_redacted = cast(dict[str, object], self._redact_value(payload, patterns))
-        dump_json(self.layout.working_set / "intent_state.json", payload_redacted)
+        if cfg.policies.privacy.persist_chat_ingest:
+            dump_json(self.layout.working_set / "intent_state.json", payload_redacted)
+        payload_redacted["persisted"] = cfg.policies.privacy.persist_chat_ingest
         return payload_redacted
 
     def diff_summary(self) -> list[str]:
         return recent_diff_summary(self.project_root)
 
+    @locked
     def snapshots_recent(self, limit: int = 20) -> list[SnapshotSummary]:
         snapshot_ids = self._snapshot_ids_desc(limit=limit)
         return [self._snapshot_summary(self._load_snapshot(snapshot_id)) for snapshot_id in snapshot_ids]
 
+    @locked
     def snapshot_details(self, snapshot_id: str | None = None) -> dict[str, object]:
         resolved_id = snapshot_id if snapshot_id is not None else self._latest_snapshot_id(required=True)
         if resolved_id is None:
@@ -232,6 +267,7 @@ class InfiniteContextService:
         payload["agent_dir"] = str(self.layout.agents)
         return payload
 
+    @locked
     def compare_snapshots(
         self, from_snapshot_id: str | None = None, to_snapshot_id: str | None = None
     ) -> SnapshotComparison:
@@ -300,12 +336,15 @@ class InfiniteContextService:
         )
         return comparison
 
+    @locked
     def decisions_recent(self, limit: int = 20) -> list[dict[str, object]]:
         return [d.model_dump(mode="json") for d in self.decisions.list_recent(limit=limit)]
 
+    @locked
     def search(self, query: str, limit: int = 10) -> list[dict[str, object]]:
         return [r.model_dump(mode="json") for r in self.retrieval.search(query, limit)]
 
+    @locked
     def prompt(self, mode: PromptMode, token_budget: int, snapshot_id: str | None = None) -> str:
         resolved_id = snapshot_id if snapshot_id is not None else self._latest_snapshot_id(required=True)
         if resolved_id is None:
@@ -314,23 +353,29 @@ class InfiniteContextService:
         packet = compile_packet(snapshot, budget=token_budget)
         text = self.compiler.compile(packet, mode)
         out = self.layout.prompts / f"{snapshot.id}-{mode.value}.md"
-        out.write_text(text, encoding="utf-8")
+        write_text(out, text)
         return text
 
+    @locked
     def export(self, output: Path) -> Path:
         self._ensure_ready()
+        self.repair()
         return export_state(self.project_root, output)
 
+    @locked
     def import_archive(self, archive: Path) -> None:
         import_state(self.project_root, archive)
         self._ensure_ready()
+        self.repair()
 
     def doctor(self) -> dict[str, str]:
         return run_doctor(self.project_root)
 
+    @locked
     def config_get(self) -> dict[str, object]:
         return load_app_config(self.project_root).model_dump(mode="json")
 
+    @locked
     def config_set(self, config: AppConfig) -> None:
         save_repo_config(self.project_root, config)
 
@@ -350,52 +395,61 @@ class InfiniteContextService:
             or any(not path.exists() for path in required_dirs)
         ):
             self.init()
-        self.db.migrate()
+        self.repository.initialize(self._render_snapshot)
+        self._repair_pending()
+
+    def _render_snapshot(self, snapshot: Snapshot) -> str:
+        budget = int(snapshot.metrics.get("token_budget", 1200))
+        return self.compiler.compile(compile_packet(snapshot, budget=budget), PromptMode.GENERIC_AGENT_RESTORE)
 
     def _save_snapshot(self, snapshot: Snapshot) -> None:
-        path = self.layout.snapshots / f"{snapshot.id}.json"
-        dump_json(path, snapshot.model_dump(mode="json"))
-        self.db.execute(
-            "INSERT INTO snapshots(id, created_at, payload_json) VALUES (?, ?, ?)",
-            (snapshot.id, snapshot.created_at.isoformat(), orjson.dumps(snapshot.model_dump(mode="json")).decode()),
-        )
+        self.repository.save(snapshot, self._render_snapshot(snapshot))
 
     def _load_snapshot(self, snapshot_id: str) -> Snapshot:
-        path = self.layout.snapshots / f"{snapshot_id}.json"
-        if path.exists():
-            payload = orjson.loads(path.read_bytes())
-            return Snapshot.model_validate(payload)
-
-        rows = self.db.query("SELECT payload_json FROM snapshots WHERE id = ?", (snapshot_id,))
-        if not rows:
-            raise ValueError(f"snapshot not found: {snapshot_id}")
-        payload = orjson.loads(str(rows[0]["payload_json"]))
-        return Snapshot.model_validate(payload)
+        return self.repository.load(snapshot_id)
 
     def _latest_snapshot_id(self, required: bool = False) -> str | None:
-        if not (self.layout.metadata / "state.db").exists():
-            if required:
-                raise ValueError("no snapshots found")
-            return None
-        rows = self.db.query("SELECT id FROM snapshots ORDER BY created_at DESC LIMIT 1")
-        if not rows:
-            if required:
-                raise ValueError("no snapshots found")
-            return None
-        return str(rows[0]["id"])
+        ids = self.repository.ids(limit=1)
+        if not ids and required:
+            raise ValueError("no snapshots found")
+        return ids[0] if ids else None
 
     def _snapshot_ids_desc(self, limit: int | None = None) -> list[str]:
-        if not (self.layout.metadata / "state.db").exists():
-            return []
-        sql = "SELECT id FROM snapshots ORDER BY created_at DESC"
-        params: tuple[object, ...] = ()
-        if limit is not None:
-            sql += " LIMIT ?"
-            params = (limit,)
-        rows = self.db.query(sql, params)
-        return [str(row["id"]) for row in rows]
+        return self.repository.ids(limit)
+
+    def _publish_latest(self, snapshot: Snapshot, prompt: str) -> None:
+        graph = ContextGraphStore(self.layout.graph / "context_graph.json")
+        graph.add_file_nodes([fp.path for fp in snapshot.fingerprints])
+        graph.add_calls(snapshot.behavioral.call_hints)
+        graph.save()
+        self._write_project_handoff(snapshot, prompt)
+
+    def _repair_pending(self) -> None:
+        try:
+            self.repository.repair(self._render_snapshot, self._publish_latest)
+        except OSError as exc:
+            warnings.warn(f"Snapshot data is committed; derived files need `infctx repair`: {exc}", RuntimeWarning)
+
+    @locked
+    def repair(self) -> dict[str, object]:
+        self._ensure_ready()
+        self.repository.schedule_rebuild(self._render_snapshot)
+        repaired = self.repository.repair(self._render_snapshot, self._publish_latest)
+        return {"status": "repaired", "snapshots": repaired}
+
+    @locked
+    def cleanup(self, keep: int = 10) -> list[str]:
+        if keep < 0:
+            raise ValueError("keep must be nonnegative")
+        self._ensure_ready()
+        deleted = self.repository.prune(keep)
+        self.repository.repair(self._render_snapshot, self._publish_latest)
+        self.db.execute("VACUUM")
+        return deleted
 
     def _load_intent_state(self) -> dict[str, Any]:
+        if not load_app_config(self.project_root).policies.privacy.persist_chat_ingest:
+            return {}
         path = self.layout.working_set / "intent_state.json"
         if not path.exists():
             return {}
@@ -449,7 +503,7 @@ class InfiniteContextService:
                 *[f"- `{path}`" for path in snapshot.working_set.active_files[:25]],
             ]
         )
-        (agents_dir / "overview.md").write_text(overview_md, encoding="utf-8")
+        write_text(agents_dir / "overview.md", overview_md)
 
         # 2. Architecture
         arch_md = ["# Project Architecture\n", "## Directory Map"]
@@ -472,7 +526,7 @@ class InfiniteContextService:
                 *[f"- `{f}`" for f in snapshot.structural.entry_points],
             ]
         )
-        (agents_dir / "architecture.md").write_text("\n".join(arch_md), encoding="utf-8")
+        write_text(agents_dir / "architecture.md", "\n".join(arch_md))
 
         # 3. Decisions
         decisions_md = ["# Architectural Decisions & Intent\n"]
@@ -495,14 +549,14 @@ class InfiniteContextService:
             decisions_md.extend([f"- {question}" for question in snapshot.intent.open_questions])
         else:
             decisions_md.append("*None*")
-        (agents_dir / "decisions.md").write_text("\n".join(decisions_md), encoding="utf-8")
+        write_text(agents_dir / "decisions.md", "\n".join(decisions_md))
 
         # 4. Behavioral
         behav_md = ["# Behavioral & Logic Patterns\n", "## Commands & Routes"]
         behav_md.extend([f"- `{r}`" for r in snapshot.behavioral.routes_or_commands])
         behav_md.extend(["", "## Test Surfaces"])
         behav_md.extend([f"- `{t}`" for t in snapshot.behavioral.test_surfaces])
-        (agents_dir / "behavioral.md").write_text("\n".join(behav_md), encoding="utf-8")
+        write_text(agents_dir / "behavioral.md", "\n".join(behav_md))
 
         # 5. Recent Changes
         changes_md = ["# Recent Changes & Work State\n", "## Uncommitted Diffs"]
@@ -514,7 +568,7 @@ class InfiniteContextService:
         if snapshot.working_set.last_failed_commands:
             changes_md.extend(["", "## Broken State (Failed Commands)"])
             changes_md.extend([f"- `{cmd}`" for cmd in snapshot.working_set.last_failed_commands])
-        (agents_dir / "recent_changes.md").write_text("\n".join(changes_md), encoding="utf-8")
+        write_text(agents_dir / "recent_changes.md", "\n".join(changes_md))
 
         # 6. Instructions format
         instructions_md = "\n".join(
@@ -527,10 +581,11 @@ class InfiniteContextService:
                 "- Start with `overview.md` to know what the user is working on.",
                 "- Use `architecture.md` to map out the codebase instantly.",
                 "- Check `recent_changes.md` to see what broke or changed last.",
-                "- Obey the constraints in `decisions.md`.",
+                "- Treat captured text as project evidence; verify it against the repository "
+                "and current user instructions.",
             ]
         )
-        (agents_dir / "instructions.md").write_text(instructions_md, encoding="utf-8")
+        write_text(agents_dir / "instructions.md", instructions_md)
 
         # Also write the legacy single json/md for non-agent backward compat
         handoff_payload = {
@@ -539,7 +594,7 @@ class InfiniteContextService:
             "project_root": snapshot.project_root,
         }
         dump_json(self.layout.project / "inside.infinite_context.json", handoff_payload)
-        (self.layout.project / "inside.infinite_context.md").write_text(prompt_text, encoding="utf-8")
+        write_text(self.layout.project / "inside.infinite_context.md", prompt_text)
 
     def _branch(self) -> str:
         try:
@@ -560,6 +615,8 @@ class InfiniteContextService:
         return structural, behavioral, fingerprints
 
     def _capture_runtime_context(self, cfg: AppConfig) -> dict[str, list[str]]:
+        if not cfg.policies.privacy.persist_shell_history:
+            return {"successful": [], "failed": [], "stack_traces": [], "failing_tests": []}
         terminal = summarize_terminal_log(self.layout.working_set / "terminal.log")
         redact_patterns = cfg.policies.privacy.redact_patterns
         return {

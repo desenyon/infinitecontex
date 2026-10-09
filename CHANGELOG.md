@@ -2,6 +2,31 @@
 
 All notable changes to this project are documented here.
 
+## [0.4.0] - Unreleased
+
+### Added
+
+- Transactional snapshot repository, durable artifact recovery queue, and `repair` command/client method.
+- Read-only doctor diagnostics for SQLite integrity, snapshot artifacts, search orphans, and pending recovery.
+- Offline CLI smoke coverage and Python 3.11/3.13 CI validation.
+
+### Fixed
+
+- Archive imports are bounded, confined to `.infctx`, staged, validated, and rolled back on publication failure.
+- Exports use SQLite backup for committed WAL data and exclude nested exports.
+- Chat and terminal persistence flags are enforced; chat defaults to preview-only. Redaction precedes persistence.
+- Capture/restore reject links and unsafe paths; excluded files cannot supply directory summaries.
+- Staged Git changes, rename paths, spaces, Unicode, and embedded newlines are captured using porcelain NUL records.
+- Cleanup removes snapshot search documents, prompts, restore reports, and obsolete latest handoffs.
+- `setup-agent` preserves existing user instructions through an idempotent managed block.
+- JSON CLI output is emitted without terminal line wrapping.
+
+### Migration
+
+- Additive storage schema 2 keeps public models and paths. SQLite records become authoritative; legacy JSON-only snapshots are adopted once.
+- Existing state is retained. Previously ignored privacy flags now change future capture; enable them explicitly to persist optional inputs.
+- See the README for backup, migration, archive overlay semantics, and recovery limitations.
+
 ## [0.3.1] - 2026-05-26
 
 ### Changed
