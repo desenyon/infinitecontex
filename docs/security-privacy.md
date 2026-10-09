@@ -8,7 +8,7 @@ Infinite Context performs capture, search, and rendering locally. It does not se
 
 `persist_shell_history=false` (default) prevents terminal-log content from entering snapshots. When enabled, the service summarizes the user-supplied `.infctx/working_set/terminal.log`. It does not collect shell history automatically.
 
-Explicit goals, notes, and pins are still saved. Redaction applies before saving these narrative fields and captured snapshot context. Expressions are validated when configuration loads. Patterns are best-effort text matching, not a secrets detector, encryption, or a secure-erasure mechanism.
+Explicit goals, notes, and pins are still saved. Pin paths retain their original identity so unpin works; pin notes are redacted. Redaction applies before saving these narrative fields and captured snapshot context. Expressions are validated when configuration loads. Patterns are best-effort text matching, not a secrets detector, encryption, or a secure-erasure mechanism.
 
 Disabling a flag does not erase prior snapshots, chat search, source logs, events, or archives. Exports include historical state and manually placed files. Review the contents before sharing. A transcript included by repository scan patterns is a repository input regardless of the chat flag; store sensitive transcripts outside the project or exclude them.
 

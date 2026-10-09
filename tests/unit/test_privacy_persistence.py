@@ -66,3 +66,16 @@ def test_notes_and_repo_insights_redacted_before_storage(tmp_repo: Path) -> None
 def test_invalid_redaction_regex_is_rejected() -> None:
     with pytest.raises(ValueError, match="invalid redaction"):
         AppConfig.model_validate({"policies": {"privacy": {"redact_patterns": ["["]}}})
+
+
+def test_pin_identity_survives_redaction_and_can_be_unpinned(tmp_repo: Path) -> None:
+    svc = InfiniteContextService(tmp_repo)
+    path = "token=synthetic-filename.py"
+    svc.pin(path, "token=synthetic-note")
+    pins = svc.pin_records()
+    assert len(pins) == 1
+    assert pins[0].path == path
+    assert pins[0].note == "[REDACTED]"
+    assert "synthetic-note" not in (svc.layout.events / "events.jsonl").read_text()
+    assert svc.unpin(path) is True
+    assert svc.list_pins() == []

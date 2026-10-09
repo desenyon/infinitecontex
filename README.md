@@ -168,7 +168,7 @@ infctx ingest-chat --file /path/to/transcript.txt --json
 infctx snapshot
 ```
 
-Redaction runs before storing ingested chat, explicit decisions and pin text, and the textual snapshot context used to produce prompts, search, and handoff files. Invalid regular expressions are rejected when configuration is validated. Re-ingesting the same source replaces its search document instead of adding duplicates.
+Redaction runs before storing ingested chat, explicit decisions and pin notes, and the textual snapshot context used to produce prompts, search, and handoff files. Invalid regular expressions are rejected when configuration is validated. Re-ingesting the same source replaces its search document instead of adding duplicates.
 
 **Redaction is best effort, not secret detection or encryption.** It does not rewrite your source files or original terminal/transcript inputs. File names, fingerprints, absolute project paths, and historical records can remain sensitive. Disabling persistence affects future capture; it does not erase previous snapshots, chat index entries, events, manually supplied logs, or existing archives. Exports contain historical state and input files under `.infctx/`; inspect them before sharing. `cleanup` removes snapshot history and its derived artifacts, not chat or decision history, and is not secure erasure.
 

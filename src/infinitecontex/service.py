@@ -173,7 +173,8 @@ class InfiniteContextService:
     def pin(self, path: str, note: str) -> None:
         self._ensure_ready()
         patterns = load_app_config(self.project_root).policies.privacy.redact_patterns
-        path, note = redact_text(path, patterns), redact_text(note, patterns)
+        # The path is the pin identity used by unpin; redact its descriptive note only.
+        note = redact_text(note, patterns)
         self.db.execute(
             "INSERT OR REPLACE INTO pins(path, note, created_at) VALUES (?, ?, ?)",
             (path, note, datetime.now(UTC).isoformat()),
